@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -13,11 +14,21 @@ TIMEOUT = 15
 TTL_SECONDS = 6 * 60 * 60
 
 
+VERSION_SUFFIX = re.compile(r"[-@]v?\d+\.\d+\.\d+$")
+
+
 def plugin_name(file: str) -> str:
-    for sep in ("-", "@"):
-        if sep in file:
-            file = file.split(sep, 1)[0]
-    return file
+    """Strip the VERSION off a plugin's filename, never split at the first separator.
+
+    A plugin whose own name carries a hyphen resolves to the wrong plugin entirely under a
+    split-at-the-first-hyphen rule, and the wrong name still LOOKS like a name — so the failure is a
+    404 against a plausible URL rather than anything that reads as a parsing bug.
+
+    Returns:
+        The plugin's name without its version.
+
+    """
+    return VERSION_SUFFIX.sub("", file)
 
 
 def plugin_path(pinned: str) -> str | None:

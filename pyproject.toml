@@ -12,6 +12,9 @@ dependencies = []
 [project.urls]
 Homepage = "https://github.com/1qh/lintmax-py"
 
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+
 [project.scripts]
 lintmax-py = "lintmax_py.cli:main"
 
@@ -22,3 +25,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "lintmax_py"
 module-root = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
