@@ -1,4 +1,10 @@
 # Copyright (c) lintmax-py contributors. Licensed under the MIT License.
+"""Maximum-strictness Python quality gate."""
+
 from __future__ import annotations
 
-__version__ = "0.0.1"
+from .version import installed
+
+__version__ = installed()
+
+__all__ = ["__version__"]
