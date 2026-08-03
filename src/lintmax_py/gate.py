@@ -85,5 +85,5 @@ def run_gate(root: Path, *, fix: bool) -> list[Finding]:
 
 def rules_text() -> str:
     inventory = rules.inventory()
-    extra = [t for t in (*tools.UV_TOOLS, *tools.NATIVE_TOOLS) if have(t)]
+    extra = [t for t in tools.executables() if have(t)]
     return rules.summary(inventory) + "\nactive tools: " + ", ".join(extra)

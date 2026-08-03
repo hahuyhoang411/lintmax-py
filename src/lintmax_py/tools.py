@@ -8,8 +8,17 @@ from pathlib import Path
 
 from .proc import have, run
 
-UV_TOOLS = ("ruff", "ty", "vulture", "deptry", "pip-audit")
-NATIVE_TOOLS = ("dprint", "typos", "shellcheck", "shfmt")
+TOOLS = {
+    "ruff": "ruff",
+    "ty": "ty",
+    "vulture": "vulture",
+    "deptry": "deptry",
+    "pip-audit": "pip-audit",
+    "typos": "typos",
+    "shellcheck-py": "shellcheck",
+    "shfmt-py": "shfmt",
+    "dprint-py": "dprint",
+}
 REFRESH_TTL_SECONDS = 24 * 60 * 60
 
 
@@ -30,7 +39,7 @@ def fresh() -> bool:
         return False
     try:
         stamped = float(path.read_text(encoding="utf-8").strip())
-    except ValueError:
+    except (OSError, ValueError):
         return False
     return (time.time() - stamped) < REFRESH_TTL_SECONDS
 
@@ -44,18 +53,17 @@ def mark() -> None:
 def ensure() -> list[str]:
     missing: list[str] = []
     refresh = not fresh()
-    for tool in UV_TOOLS:
-        if refresh or not have(tool):
-            res = run(["uv", "tool", "install", "--quiet", f"{tool}@latest"], timeout=600)
-            if res.code != 0 and not have(tool):
-                missing.append(f"{tool}: install failed ({res.out})")
-    for tool in NATIVE_TOOLS:
-        if have(tool):
+    for package, exe in TOOLS.items():
+        if not refresh and have(exe):
             continue
-        if have("brew"):
-            run(["brew", "install", "--quiet", tool], timeout=900)
-        if not have(tool):
-            missing.append(f"{tool}: not installed and could not be installed")
+        res = run(["uv", "tool", "install", "--quiet", f"{package}@latest"], timeout=900)
+        if not have(exe):
+            reason = res.out or f"exit {res.code}"
+            missing.append(f"{exe}: install of {package} did not produce it ({reason})")
     if refresh:
         mark()
     return missing
+
+
+def executables() -> list[str]:
+    return sorted(TOOLS.values())
