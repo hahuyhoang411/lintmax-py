@@ -12,6 +12,8 @@ Python ships no strictness by default: no compiler, no unused-import error, no t
 
 No tool version is ever pinned. Ruff, ty and every child tool are fetched at latest on each run, and the rule set is DERIVED from the installed ruff rather than listed — so the moment ruff ships a new rule, your gate runs it. Dependency staleness is scanned against upstream every run.
 
+dprint plugins resolve through each plugin's `latest.json` and the concrete versioned URL is written back. A constant floating URL is deliberately NOT used: dprint caches a plugin by its URL, so an unchanging URL resolves once and then freezes silently, which is the exact staleness the floating form appears to solve.
+
 ## Use
 
 Exactly four commands — the lean agent-first surface:
