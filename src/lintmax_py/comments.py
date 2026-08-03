@@ -5,6 +5,8 @@ import io
 import tokenize
 from typing import TYPE_CHECKING
 
+from .paths import sources
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -60,9 +62,7 @@ def strip_text(source: str) -> str:
 
 def strip_tree(root: Path) -> int:
     changed = 0
-    for path in sorted(root.rglob("*.py")):
-        if any(part in {".venv", "__pycache__", ".git", "dist", "build"} for part in path.parts):
-            continue
+    for path in sources(root):
         original = path.read_text(encoding="utf-8")
         rewritten = strip_text(original)
         if rewritten != original:
@@ -73,9 +73,7 @@ def strip_tree(root: Path) -> int:
 
 def offenders(root: Path) -> list[str]:
     found: list[str] = []
-    for path in sorted(root.rglob("*.py")):
-        if any(part in {".venv", "__pycache__", ".git", "dist", "build"} for part in path.parts):
-            continue
+    for path in sources(root):
         text = path.read_text(encoding="utf-8")
         if strip_text(text) != text:
             found.append(str(path))

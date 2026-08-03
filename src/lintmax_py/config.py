@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import rules
 from .dprint import bump
+from .paths import GLOB_EXCLUDES
 
 LINE_LENGTH = 123
 
@@ -23,16 +24,7 @@ DPRINT_SEED = [
     "https://plugins.dprint.dev/bartlomieju/lax-sql-0.3.0.wasm",
 ]
 
-EXCLUDES = [
-    "**/.venv",
-    "**/__pycache__",
-    "**/.git",
-    "**/dist",
-    "**/build",
-    "**/.ruff_cache",
-    "**/node_modules",
-    "**/uv.lock",
-]
+EXCLUDES = GLOB_EXCLUDES
 
 
 def ruff_toml(inventory: list[dict[str, object]]) -> str:

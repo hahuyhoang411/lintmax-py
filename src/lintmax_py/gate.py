@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from . import comments, config, rules, tools
+from .paths import SKIP_DIRS
 from .proc import Result, have, run
 
 if TYPE_CHECKING:
@@ -37,7 +38,8 @@ def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         found += _stage("ruff format", run(["ruff", "format", "--check", *ruff_common, str(root)]))
         found += _stage("ruff check", run(["ruff", "check", *ruff_common, str(root)]))
     found += _stage("ty", run(["ty", "check", "--error", "all", str(root)]))
-    found += _stage("vulture", run(["vulture", str(root)]))
+    excluded = ",".join(f"*/{name}/*" for name in sorted(SKIP_DIRS))
+    found += _stage("vulture", run(["vulture", "--exclude", excluded, str(root)]))
     return found
 
 
