@@ -16,5 +16,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: install self at HEAD (current checkout = current main)
         run: uv tool install --force .
+      - name: materialize the project environment the gate type-checks against
+        run: uv sync --all-groups
       - name: dogfood — check
         run: lintmax-py check
