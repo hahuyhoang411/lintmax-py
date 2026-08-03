@@ -32,9 +32,9 @@ tags_file=$(mktemp)
 releases_file=$(mktemp)
 trap 'rm -f "${tags_file}" "${releases_file}"' EXIT
 
-all_tags "${this_repo}" >"${tags_file}"
+all_tags "${this_repo}" > "${tags_file}"
 gh release list --repo "${this_repo}" --limit 200 --json tagName --jq '.[].tagName' \
-  </dev/null >"${releases_file}"
+  < /dev/null > "${releases_file}"
 
 keep=$(
   {
@@ -55,14 +55,14 @@ while read -r t; do
   if [[ ${t} == "${keep}" || ${newest} != "${keep}" ]]; then
     continue
   fi
-  if gh release delete "${t}" --repo "${this_repo}" --yes --cleanup-tag 2>/dev/null; then
+  if gh release delete "${t}" --repo "${this_repo}" --yes --cleanup-tag 2> /dev/null; then
     echo "deleted release+tag ${t}"
   else
     echo "prune-old-releases: could not delete release ${t}" >&2
     failed=$((failed + 1))
   fi
   sleep 1
-done <"${releases_file}"
+done < "${releases_file}"
 
 while read -r t; do
   if [[ -z ${t} ]]; then
@@ -76,7 +76,7 @@ while read -r t; do
   # already gone by the time this loop reaches it. An absent reference is the work already done,
   # never a failure — counting it as one is what failed a release whose prune fully succeeded.
   set +e
-  out=$(gh api -X DELETE "repos/${this_repo}/git/refs/tags/${t}" </dev/null 2>&1)
+  out=$(gh api -X DELETE "repos/${this_repo}/git/refs/tags/${t}" < /dev/null 2>&1)
   status=$?
   set -e
   if [[ ${status} -eq 0 ]]; then
@@ -88,7 +88,7 @@ while read -r t; do
     failed=$((failed + 1))
   fi
   sleep 1
-done <"${tags_file}"
+done < "${tags_file}"
 
 # Announcing the prune regardless is what let a systematic failure — a token without the scope —
 # look exactly like a working prune.

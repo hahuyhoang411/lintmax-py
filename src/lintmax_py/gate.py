@@ -10,6 +10,9 @@ from . import comments, config, rules, staleness, tools
 from .paths import SKIP_DIRS, skipped
 from .proc import Result, have, run
 
+SHELLCHECK_FLAGS = ("--enable=all", "--severity=style", "--external-sources")
+SHFMT_FLAGS = ("-s", "-ci", "-bn", "-sr", "-i", "2")
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -108,8 +111,8 @@ def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         if not any(part in {".venv", ".git", "node_modules"} for part in p.parts)
     ]
     if scripts:
-        found += _stage("shellcheck", run(["shellcheck", "--severity=style", *scripts]))
-        shfmt = ["shfmt", "-w" if fix else "-d", "-i", "2", "-ci", *scripts]
+        found += _stage("shellcheck", run(["shellcheck", *SHELLCHECK_FLAGS, *scripts]))
+        shfmt = ["shfmt", "-w" if fix else "-d", *SHFMT_FLAGS, *scripts]
         found += _stage("shfmt", run(shfmt))
     if (root / "pyproject.toml").is_file():
         found += _stage("deptry", run(["deptry", *_deptry_args(root)], cwd=str(root)))
