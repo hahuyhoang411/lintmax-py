@@ -1,0 +1,36 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  actions: write
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: build
+        run: uv build
+      - name: publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        # publish is optional (operator-supplied token); when absent, skip — never abort the prune steps
+        if: ${{ env.UV_PUBLISH_TOKEN != '' }}
+        run: uv publish
+      - name: prune to a single present release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/prune-old-releases.sh
+      - name: prune ci runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: bash .github/scripts/prune-ci-runs.sh

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from . import comments, config, rules, tools
+from . import comments, config, rules, staleness, tools
 from .paths import SKIP_DIRS
 from .proc import Result, have, run
 
@@ -78,6 +78,7 @@ def run_gate(root: Path, *, fix: bool) -> list[Finding]:
 
     findings += _python_stages(root, cfg, fix=fix)
     findings += _repo_stages(root, cfg, fix=fix)
+    findings += [Finding(stage="staleness", detail=d) for d in staleness.behind(root)]
 
     return findings
 
