@@ -85,19 +85,33 @@ def _deptry_args(root: Path) -> list[str]:
     })
     for name in packages:
         args += ["--known-first-party", name]
-    groups = _dev_groups(root)
-    if groups:
-        args += ["--pep621-dev-dependency-groups", ",".join(groups)]
+    optional = _groups(root, "project", "optional-dependencies")
+    if optional:
+        args += ["--optional-dependencies-dev-groups", ",".join(optional)]
     return args
 
 
-def _dev_groups(root: Path) -> list[str]:
+def _groups(root: Path, *path: str) -> list[str]:
+    """Names of the dependency groups at the given manifest path.
+
+    PEP 735 `[dependency-groups]` are recognised as development dependencies without being named,
+    so passing them to the flag that reads `[project.optional-dependencies]` finds nothing and
+    warns about groups that do not exist there.
+
+    Returns:
+        The group names, or nothing when the section is absent.
+
+    """
     try:
         manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return []
-    groups = manifest.get("dependency-groups")
-    return sorted(groups) if isinstance(groups, dict) else []
+    node: object = manifest
+    for key in path:
+        if not isinstance(node, dict):
+            return []
+        node = node.get(key)
+    return sorted(node) if isinstance(node, dict) else []
 
 
 def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
