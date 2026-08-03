@@ -31,23 +31,23 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 - Child tools reinstalled at latest on a refresh cadence; CI always forces latest.
 - The binary refreshes itself in CI before gating.
-- Green-tree-hash cache skips a `check` whose tree is unchanged.
+- No green-tree-hash cache: measured on 10,039 real files with all 968 rules, a full ruff run costs 4.3s while hashing the tree to skip it costs 2.6s, so the cache buys ~40% in its best case and adds a false-green failure mode. The expensive work is the network, and that is TTL-cached instead.
 - Dependency staleness scanned against upstream every run.
 
 ## What runs
 
-| Layer | Tool | Catches |
-| --- | --- | --- |
-| comments | native (`tokenize`) | deletes every `#` comment except directives; docstrings survive |
-| format | ruff format | deterministic formatting |
-| lint | ruff, every rule including preview | 968 rules across 59 linters at ruff 0.16.1 |
-| types | ty, every rule at error | type errors, including unannotated bodies mypy skips |
-| dead code | vulture | unreachable functions, classes and names |
-| unused deps | deptry | declared-but-unused and used-but-undeclared |
-| vulnerabilities | pip-audit | PyPI Advisory Database plus OSV |
-| spelling | typos | misspellings in code, identifiers and filenames |
-| shell | shellcheck, shfmt | every shell script, every optional check on |
-| other files | dprint | toml, json, markdown, yaml, dockerfile, css, html |
+| Layer           | Tool                               | Catches                                                         |
+| --------------- | ---------------------------------- | --------------------------------------------------------------- |
+| comments        | native (`tokenize`)                | deletes every `#` comment except directives; docstrings survive |
+| format          | ruff format                        | deterministic formatting                                        |
+| lint            | ruff, every rule including preview | 968 rules across 59 linters at ruff 0.16.1                      |
+| types           | ty, every rule at error            | type errors, including unannotated bodies mypy skips            |
+| dead code       | vulture                            | unreachable functions, classes and names                        |
+| unused deps     | deptry                             | declared-but-unused and used-but-undeclared                     |
+| vulnerabilities | pip-audit                          | PyPI Advisory Database plus OSV                                 |
+| spelling        | typos                              | misspellings in code, identifiers and filenames                 |
+| shell           | shellcheck, shfmt                  | every shell script, every optional check on                     |
+| other files     | dprint                             | toml, json, markdown, yaml, dockerfile, css, html               |
 
 ## Strictness policy
 
@@ -59,8 +59,8 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 ## Earned disables
 
-| Rule | Reason |
-| --- | --- |
+| Rule          | Reason                                                                       |
+| ------------- | ---------------------------------------------------------------------------- |
 | `D100`-`D107` | operator decision: code is self-explanatory rather than docstring-documented |
 
 ## Configless

@@ -1,0 +1,24 @@
+[project]
+name = "lintmax-py"
+version = "0.0.1"
+description = "Maximum-strictness Python quality gate: ruff + ty, all rules, always latest, one command"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Lai Quang Huy" }]
+keywords = ["lint", "format", "ruff", "ty", "quality", "gate"]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/1qh/lintmax-py"
+
+[project.scripts]
+lintmax-py = "lintmax_py.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.10"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "lintmax_py"
+module-root = "src"
