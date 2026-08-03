@@ -26,6 +26,21 @@ DPRINT_SEED = [
 
 EXCLUDES = GLOB_EXCLUDES
 
+TEST_GLOBS = ("**/tests/**/*.py", "**/test_*.py", "**/*_test.py", "**/conftest.py")
+TEST_IGNORES = ("S101", "PLR2004", "INP001", "PLC2701", "SLF001")
+"""Rules whose own purpose statement excludes test code, scoped to test files ONLY.
+
+`assert` is pytest's assertion API rather than a production shortcut, a test's expected value IS a
+literal so naming it only restates the assertion, a test directory carries no `__init__.py` by
+design, and a test that never reaches its subject's internals cannot pin them. Nothing that ships
+loses a rule: every one of these stays enforced on every other file in the tree.
+"""
+
+
+def _test_scoping() -> str:
+    body = json.dumps(list(TEST_IGNORES))
+    return "".join(f"{json.dumps(glob)} = {body}\n" for glob in TEST_GLOBS)
+
 
 def ruff_toml(inventory: list[dict[str, object]]) -> str:
     select = json.dumps(rules.selection(inventory))
@@ -37,6 +52,7 @@ def ruff_toml(inventory: list[dict[str, object]]) -> str:
         "[lint]\n"
         f"select = {select}\n"
         f"ignore = {ignore}\n"
+        f"[lint.per-file-ignores]\n{_test_scoping()}"
         "[lint.flake8-quotes]\n"
         'inline-quotes = "double"\n'
         "[lint.flake8-copyright]\n"

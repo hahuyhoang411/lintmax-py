@@ -4,8 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import tomllib
+
 from . import comments, config, rules, staleness, tools
-from .paths import SKIP_DIRS
+from .paths import SKIP_DIRS, skipped
 from .proc import Result, have, run
 
 if TYPE_CHECKING:
@@ -37,10 +39,62 @@ def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
     else:
         found += _stage("ruff format", run(["ruff", "format", "--check", *ruff_common, str(root)]))
         found += _stage("ruff check", run(["ruff", "check", *ruff_common, str(root)]))
-    found += _stage("ty", run(["ty", "check", "--error", "all", str(root)]))
+    found += _stage("ty", run(["ty", "check", "--error", "all", *_environment(root), str(root)]))
     excluded = ",".join(f"*/{name}/*" for name in sorted(SKIP_DIRS))
     found += _stage("vulture", run(["vulture", "--exclude", excluded, str(root)]))
     return found
+
+
+def _environment(root: Path) -> list[str]:
+    """Point the type checker at the TARGET project's environment rather than the gate's own.
+
+    A checker resolving imports against whatever venv the gate happens to run from reports every
+    third-party import in the project as unresolvable — a wall of findings about the invocation,
+    identical in shape to a project with no dependencies installed, and it appears only when the
+    gate is run from a different checkout than the one it is checking.
+
+    Returns:
+        The environment flag, or nothing when the project has no environment of its own.
+
+    """
+    venv = root / ".venv"
+    return ["--python", str(venv)] if venv.is_dir() else []
+
+
+def _deptry_args(root: Path) -> list[str]:
+    """Tell deptry what the project's OWN packages and dev groups are, derived from the project.
+
+    Without them every import of the package under test reads as an undeclared dependency and every
+    test-only import of a dev tool reads as a misplaced one — findings about the invocation rather
+    than about the tree. The sets come from the manifest and the source layout, never a hand-kept
+    list, so a package or group added tomorrow is covered without touching this.
+
+    Returns:
+        The arguments deptry is invoked with.
+
+    """
+    args = ["."]
+    packages = sorted({
+        entry.name
+        for parent in (root, root / "src")
+        for entry in (parent.iterdir() if parent.is_dir() else [])
+        if entry.is_dir() and (entry / "__init__.py").is_file() and not skipped(entry)
+    })
+    for name in packages:
+        args += ["--known-first-party", name]
+    groups = _dev_groups(root)
+    if groups:
+        args += ["--pep621-dev-dependency-groups", ",".join(groups)]
+    return args
+
+
+def _dev_groups(root: Path) -> list[str]:
+    try:
+        manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    groups = manifest.get("dependency-groups")
+    return sorted(groups) if isinstance(groups, dict) else []
 
 
 def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
@@ -58,7 +112,7 @@ def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         shfmt = ["shfmt", "-w" if fix else "-d", "-i", "2", "-ci", *scripts]
         found += _stage("shfmt", run(shfmt))
     if (root / "pyproject.toml").is_file():
-        found += _stage("deptry", run(["deptry", str(root)]))
+        found += _stage("deptry", run(["deptry", *_deptry_args(root)], cwd=str(root)))
         found += _stage("pip-audit", run(["pip-audit", "--progress-spinner", "off"], cwd=str(root)))
     return found
 
