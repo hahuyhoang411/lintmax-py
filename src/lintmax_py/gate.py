@@ -138,7 +138,7 @@ def run_gate(root: Path, *, fix: bool) -> list[Finding]:
     missing = tools.ensure()
     findings = [Finding(stage="toolchain", detail=m) for m in missing]
     inventory = rules.inventory()
-    cfg, _digest = config.materialize(inventory)
+    cfg, _digest = config.materialize(inventory, root)
 
     if fix:
         comments.strip_tree(root)

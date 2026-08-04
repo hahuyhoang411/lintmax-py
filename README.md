@@ -65,7 +65,15 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 ## Configless
 
-Every config is embedded in the tool. Your project stays clean — no ruff.toml, no ty.toml, no dprint.json, no typos.toml. Updating lintmax-py updates every project's strictness. The bundled config is generic only and carries no project or ecosystem opinion.
+Every rule config is embedded in the tool. Your project stays clean — no ruff.toml, no ty.toml, no dprint.json. Updating lintmax-py updates every project's strictness. The bundled config is generic only and carries no project or ecosystem opinion.
+
+The single exception is vocabulary, which is data rather than strictness. A spell checker with no project dictionary reports every domain noun a codebase owns — a client name, a product name, a protocol token — as a misspelling, and the only escapes would be renaming the domain or turning the stage off. So the `[default.extend-words]` and `[default.extend-identifiers]` tables are read from whichever of `typos.toml`, `_typos.toml`, `.typos.toml` or `pyproject.toml` (`[tool.typos]`) your project carries, in that order, and merged into the generated config. Nothing else in that file is read: the switches stay owned by the gate, so a project can name the words it uses and cannot weaken the check that reads them.
+
+```toml
+# typos.toml
+[default.extend-words]
+myproduct = "myproduct"
+```
 
 ## License
 

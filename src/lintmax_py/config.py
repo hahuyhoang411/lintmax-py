@@ -6,6 +6,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import tomllib
+
 from . import rules
 from .dprint import bump
 from .paths import GLOB_EXCLUDES
@@ -77,18 +79,68 @@ def dprint_json() -> str:
     )
 
 
-def typos_toml() -> str:
-    return "[default]\ncheck-filename = true\ncheck-file = true\n"
+VOCABULARY_FILES = ("typos.toml", "_typos.toml", ".typos.toml", "pyproject.toml")
+VOCABULARY_TABLES = ("extend-words", "extend-identifiers")
 
 
-def materialize(inventory: list[dict[str, object]]) -> tuple[Path, str]:
-    root = Path(tempfile.mkdtemp(prefix="lintmax-py-"))
+def vocabulary(root: Path) -> dict[str, dict[str, str]]:
+    """Read the project's own spelling dictionary from the config the speller itself discovers.
+
+    A spell checker with no project dictionary reports every domain noun a codebase owns — a client
+    name, a product name, a protocol token — as a misspelling, and the only escapes are renaming the
+    domain or turning the stage off. Neither is acceptable, so the dictionary is merged in. The
+    speller resolves one config file and offers no inheritance, and the gate passes its own generated
+    config, so a project file would otherwise be ignored entirely.
+
+    Only the two vocabulary tables are read. The switches stay owned by the gate, so a project can
+    name the words it uses and cannot weaken the check that reads them.
+
+    Returns:
+        The vocabulary tables present in the first config file that carries the speller's section.
+
+    """
+    for name in VOCABULARY_FILES:
+        section = _typos_section(root / name)
+        if section is None:
+            continue
+        found: dict[str, dict[str, str]] = {}
+        for table in VOCABULARY_TABLES:
+            entries = section.get(table)
+            if isinstance(entries, dict):
+                found[table] = {str(word): str(correction) for word, correction in entries.items()}
+        if found:
+            return found
+    return {}
+
+
+def _typos_section(path: Path) -> dict[str, object] | None:
+    try:
+        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    node = parsed.get("tool", {}).get("typos") if path.name == "pyproject.toml" else parsed
+    if not isinstance(node, dict):
+        return None
+    default = node.get("default")
+    return default if isinstance(default, dict) else None
+
+
+def typos_toml(root: Path) -> str:
+    body = "[default]\ncheck-filename = true\ncheck-file = true\n"
+    for table, entries in vocabulary(root).items():
+        body += f"[default.{table}]\n"
+        body += "".join(f"{json.dumps(word)} = {json.dumps(correction)}\n" for word, correction in sorted(entries.items()))
+    return body
+
+
+def materialize(inventory: list[dict[str, object]], root: Path) -> tuple[Path, str]:
+    cfg_root = Path(tempfile.mkdtemp(prefix="lintmax-py-"))
     written = {
         "ruff.toml": ruff_toml(inventory),
         "dprint.json": dprint_json(),
-        "typos.toml": typos_toml(),
+        "typos.toml": typos_toml(root),
     }
     for name, body in written.items():
-        (root / name).write_text(body, encoding="utf-8")
+        (cfg_root / name).write_text(body, encoding="utf-8")
     digest = hashlib.sha256("".join(written.values()).encode()).hexdigest()
-    return root, digest
+    return cfg_root, digest
