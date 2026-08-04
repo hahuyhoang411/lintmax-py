@@ -10,6 +10,16 @@ from . import comments, config, rules, staleness, tools
 from .paths import SKIP_DIRS, skipped
 from .proc import Result, have, run
 
+DEV_EXTRA_NAMES = frozenset({"dev", "development", "docs", "lint", "test", "testing", "tests", "typing"})
+"""Extras that name a development role rather than a runtime feature.
+
+An extra is a shipped capability by default — a project declaring `receiver = ["flask"]` means the
+receiver imports flask at runtime — so telling the dependency checker that every extra is
+development-only makes each of those imports read as misplaced. PEP 735 `[dependency-groups]` is the
+mechanism for development dependencies and the checker already recognises it unaided; only the
+conventional development EXTRA names are forwarded, for projects that predate that section.
+"""
+
 SHELLCHECK_FLAGS = ("--enable=all", "--severity=style", "--external-sources")
 SHFMT_FLAGS = ("-s", "-ci", "-bn", "-sr", "-i", "2")
 
@@ -44,7 +54,11 @@ def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         found += _stage("ruff check", run(["ruff", "check", *ruff_common, str(root)]))
     found += _stage("ty", run(["ty", "check", "--error", "all", *_environment(root), str(root)]))
     excluded = ",".join(f"*/{name}/*" for name in sorted(SKIP_DIRS))
-    found += _stage("vulture", run(["vulture", "--exclude", excluded, str(root)]))
+    allowances = config.vulture_allowances(root)
+    vulture_args = ["vulture", "--exclude", excluded]
+    for key, values in sorted(allowances.items()):
+        vulture_args += [f"--{key.replace('_', '-')}", ",".join(values)]
+    found += _stage("vulture", run([*vulture_args, str(root)]))
     return found
 
 
@@ -85,9 +99,9 @@ def _deptry_args(root: Path) -> list[str]:
     })
     for name in packages:
         args += ["--known-first-party", name]
-    optional = _groups(root, "project", "optional-dependencies")
-    if optional:
-        args += ["--optional-dependencies-dev-groups", ",".join(optional)]
+    dev_extras = [name for name in _groups(root, "project", "optional-dependencies") if name in DEV_EXTRA_NAMES]
+    if dev_extras:
+        args += ["--optional-dependencies-dev-groups", ",".join(dev_extras)]
     return args
 
 

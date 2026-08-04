@@ -71,11 +71,46 @@ def confusables(root: Path) -> list[str]:
     return []
 
 
+COPYRIGHT_RULE = "CPY001"
+DEFAULT_NOTICE = "(?i)Copyright\\s+(\\(c\\)|©)"
+
+
+def copyright_notice(root: Path) -> str:
+    """Read the copyright notice a project requires in its files.
+
+    The notice rule enforces nothing until a project states whose notice it wants: the holder is a
+    legal fact about that codebase, not something a gate can supply. Enabled unconditionally it
+    reports every file of every project that has made no such decision, which is noise rather than
+    strictness. Declared, it is enforced on every file; undeclared, the rule stands down and nothing
+    else relaxes.
+
+    Returns:
+        The notice pattern the project declares, or nothing when it declares none.
+
+    """
+    for name in ("ruff.toml", ".ruff.toml", "pyproject.toml"):
+        path = root / name
+        try:
+            parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        node = parsed.get("tool", {}).get("ruff") if path.name == "pyproject.toml" else parsed
+        section = node.get("lint") if isinstance(node, dict) else None
+        table = section.get("flake8-copyright") if isinstance(section, dict) else None
+        declared = table.get("notice-rgx") if isinstance(table, dict) else None
+        if isinstance(declared, str) and declared:
+            return declared
+    return ""
+
+
 def ruff_toml(inventory: list[dict[str, object]], root: Path) -> str:
     select = json.dumps(rules.selection(inventory))
     ignore = json.dumps(rules.ignored())
     allowed = confusables(root)
     allowed_line = f"allowed-confusables = {json.dumps(allowed, ensure_ascii=False)}\n" if allowed else ""
+    notice = copyright_notice(root)
+    if not notice:
+        ignore = json.dumps([*json.loads(ignore), COPYRIGHT_RULE])
     return (
         "preview = true\n"
         f"line-length = {LINE_LENGTH}\n"
@@ -88,7 +123,7 @@ def ruff_toml(inventory: list[dict[str, object]], root: Path) -> str:
         "[lint.flake8-quotes]\n"
         'inline-quotes = "double"\n'
         "[lint.flake8-copyright]\n"
-        "notice-rgx = '(?i)Copyright\\s+(\\(c\\)|©)'\n"
+        f"notice-rgx = {json.dumps(notice or DEFAULT_NOTICE)}\n"
         "[format]\n"
         "docstring-code-format = true\n"
     )
@@ -174,3 +209,35 @@ def materialize(inventory: list[dict[str, object]], root: Path) -> tuple[Path, s
         (cfg_root / name).write_text(body, encoding="utf-8")
     digest = hashlib.sha256("".join(written.values()).encode()).hexdigest()
     return cfg_root, digest
+
+
+VULTURE_KEYS = ("ignore_decorators", "ignore_names")
+
+
+def vulture_allowances(root: Path) -> dict[str, list[str]]:
+    """Read what a project declares its dead-code analysis cannot see.
+
+    A function reached only through a registration decorator, and an attribute read only by a
+    metaclass, are both live and both invisible to a static reachability scan — so the scan reports
+    every route handler and every model field as dead. That is a fact about the frameworks a project
+    uses, which the gate cannot know and the project can state, exactly like its spelling dictionary.
+
+    Only the two allowance lists are read; nothing a project writes can switch the stage off.
+
+    Returns:
+        The declared allowances, keyed by the flag they populate.
+
+    """
+    try:
+        parsed = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    section = parsed.get("tool", {}).get("vulture")
+    if not isinstance(section, dict):
+        return {}
+    found: dict[str, list[str]] = {}
+    for key in VULTURE_KEYS:
+        declared = section.get(key)
+        if isinstance(declared, list) and declared:
+            found[key] = [str(item) for item in declared]
+    return found

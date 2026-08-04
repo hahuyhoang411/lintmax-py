@@ -1,0 +1,3 @@
+# This project requires its own notice, so the rule is enforced on every file here.
+[lint.flake8-copyright]
+notice-rgx = "(?i)Copyright\\s+(\\(c\\)|©)"

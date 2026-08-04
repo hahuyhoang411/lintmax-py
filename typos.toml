@@ -1,0 +1,3 @@
+# Rule identifiers this gate names in its own source.
+[default.extend-words]
+CPY = "CPY"

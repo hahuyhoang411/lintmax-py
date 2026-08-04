@@ -59,9 +59,10 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 ## Earned disables
 
-| Rule          | Reason                                                                       |
-| ------------- | ---------------------------------------------------------------------------- |
-| `D100`-`D107` | operator decision: code is self-explanatory rather than docstring-documented |
+| Rule          | Reason                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `D100`-`D107` | operator decision: code is self-explanatory rather than docstring-documented                  |
+| `CPY001`      | stands down unless the project declares its `notice-rgx`; enforced on every file once it does |
 
 ## Configless
 
@@ -81,6 +82,23 @@ The same principle covers the ambiguous-character rule: a codebase whose domain 
 # ruff.toml
 [lint]
 allowed-confusables = ["（", "）", "："]
+```
+
+Two more facts a gate cannot infer are read the same way. A dead-code scan cannot see a function reached only through a registration decorator, nor an attribute read only by a metaclass, so a project states them and every other name stays scanned:
+
+```toml
+# pyproject.toml
+[tool.vulture]
+ignore_decorators = ["@app.route"]
+ignore_names = ["model_config"]
+```
+
+And the copyright rule enforces nothing until a project says whose notice it wants — the holder is a legal fact about that codebase. Declare `notice-rgx` and the rule is enforced on every file; declare nothing and it stands down, with no other rule relaxed.
+
+```toml
+# ruff.toml
+[lint.flake8-copyright]
+notice-rgx = "(?i)Copyright\\s+\\(c\\) Example Ltd"
 ```
 
 ## License
