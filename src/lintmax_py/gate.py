@@ -125,9 +125,9 @@ def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         if not any(part in {".venv", ".git", "node_modules"} for part in p.parts)
     ]
     if scripts:
-        found += _stage("shellcheck", run(["shellcheck", *SHELLCHECK_FLAGS, *scripts]))
         shfmt = ["shfmt", "-w" if fix else "-d", *SHFMT_FLAGS, *scripts]
         found += _stage("shfmt", run(shfmt))
+        found += _stage("shellcheck", run(["shellcheck", *SHELLCHECK_FLAGS, *scripts]))
     if (root / "pyproject.toml").is_file():
         found += _stage("deptry", run(["deptry", *_deptry_args(root)], cwd=str(root)))
         found += _stage("pip-audit", run(["pip-audit", "--progress-spinner", "off"], cwd=str(root)))
