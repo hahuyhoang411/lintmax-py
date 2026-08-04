@@ -75,6 +75,14 @@ The single exception is vocabulary, which is data rather than strictness. A spel
 myproduct = "myproduct"
 ```
 
+The same principle covers the ambiguous-character rule: a codebase whose domain language is not Latin uses punctuation the rule reads as a homoglyph, and rewriting it would change the text the product ships. Declare those characters in `ruff.toml`, `.ruff.toml` or `pyproject.toml` (`[tool.ruff.lint]`) and they are merged into the generated config; every character you do not name stays flagged.
+
+```toml
+# ruff.toml
+[lint]
+allowed-confusables = ["（", "）", "："]
+```
+
 ## License
 
 MIT

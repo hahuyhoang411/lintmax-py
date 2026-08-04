@@ -44,9 +44,38 @@ def _test_scoping() -> str:
     return "".join(f"{json.dumps(glob)} = {body}\n" for glob in TEST_GLOBS)
 
 
-def ruff_toml(inventory: list[dict[str, object]]) -> str:
+def confusables(root: Path) -> list[str]:
+    """Read the characters a project declares as belonging to its own writing system.
+
+    The ambiguous-character rule hunts homoglyphs, and on a codebase whose domain language is not
+    Latin its correct punctuation reads as an attack: full-width parentheses inside Japanese prose
+    are right, and rewriting them alters the text the product ships. That is vocabulary rather than
+    strictness, exactly like the spelling dictionary, so the project declares it and the rule stays
+    on for every character it did not name.
+
+    Returns:
+        The declared characters, or nothing when the project names none.
+
+    """
+    for name in ("ruff.toml", ".ruff.toml", "pyproject.toml"):
+        path = root / name
+        try:
+            parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        node = parsed.get("tool", {}).get("ruff") if path.name == "pyproject.toml" else parsed
+        section = node.get("lint") if isinstance(node, dict) else None
+        declared = section.get("allowed-confusables") if isinstance(section, dict) else None
+        if isinstance(declared, list) and declared:
+            return [str(char) for char in declared]
+    return []
+
+
+def ruff_toml(inventory: list[dict[str, object]], root: Path) -> str:
     select = json.dumps(rules.selection(inventory))
     ignore = json.dumps(rules.ignored())
+    allowed = confusables(root)
+    allowed_line = f"allowed-confusables = {json.dumps(allowed, ensure_ascii=False)}\n" if allowed else ""
     return (
         "preview = true\n"
         f"line-length = {LINE_LENGTH}\n"
@@ -54,6 +83,7 @@ def ruff_toml(inventory: list[dict[str, object]]) -> str:
         "[lint]\n"
         f"select = {select}\n"
         f"ignore = {ignore}\n"
+        f"{allowed_line}"
         f"[lint.per-file-ignores]\n{_test_scoping()}"
         "[lint.flake8-quotes]\n"
         'inline-quotes = "double"\n'
@@ -136,7 +166,7 @@ def typos_toml(root: Path) -> str:
 def materialize(inventory: list[dict[str, object]], root: Path) -> tuple[Path, str]:
     cfg_root = Path(tempfile.mkdtemp(prefix="lintmax-py-"))
     written = {
-        "ruff.toml": ruff_toml(inventory),
+        "ruff.toml": ruff_toml(inventory, root),
         "dprint.json": dprint_json(),
         "typos.toml": typos_toml(root),
     }
