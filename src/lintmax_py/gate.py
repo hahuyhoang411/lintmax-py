@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import tomllib
 
-from . import comments, config, rules, staleness, tools
+from . import comments, config, dprint, rules, staleness, tools
 from .paths import SKIP_DIRS, skipped
 from .proc import Result, have, run
 
@@ -130,8 +130,18 @@ def _groups(root: Path, *path: str) -> list[str]:
 
 def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
     found: list[Finding] = []
-    dprint_args = ["dprint", "fmt" if fix else "check", "--config", str(cfg / "dprint.json")]
+    dprint_config = cfg / "dprint.json"
+    dprint_args = [
+        "dprint",
+        "fmt" if fix else "check",
+        "--config",
+        str(dprint_config),
+        "--excludes",
+        dprint.MARKDOWN_GLOB,
+        "--allow-no-files",
+    ]
     found += _stage("dprint", run(dprint_args, cwd=str(root)))
+    found += [Finding(stage="markdown", detail=d) for d in dprint.sweep(root, dprint_config, fix=fix)]
     found += _stage("typos", run(["typos", "--config", str(cfg / "typos.toml"), str(root)]))
     scripts = [
         str(p)

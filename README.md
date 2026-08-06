@@ -36,18 +36,18 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 ## What runs
 
-| Layer           | Tool                               | Catches                                                         |
-| --------------- | ---------------------------------- | --------------------------------------------------------------- |
-| comments        | native (`tokenize`)                | deletes every `#` comment except directives; docstrings survive |
-| format          | ruff format                        | deterministic formatting                                        |
-| lint            | ruff, every rule including preview | 968 rules across 59 linters at ruff 0.16.1                      |
-| types           | ty, every rule at error            | type errors, including unannotated bodies mypy skips            |
-| dead code       | vulture                            | unreachable functions, classes and names                        |
-| unused deps     | deptry                             | declared-but-unused and used-but-undeclared                     |
-| vulnerabilities | pip-audit                          | PyPI Advisory Database plus OSV                                 |
-| spelling        | typos                              | misspellings in code, identifiers and filenames                 |
-| shell           | shellcheck, shfmt                  | every shell script, every optional check on                     |
-| other files     | dprint                             | toml, json, markdown, yaml, dockerfile, css, html               |
+| Layer | Tool | Catches |
+| --- | --- | --- |
+| comments | native (`tokenize`) | deletes every `#` comment except directives; docstrings survive |
+| format | ruff format | deterministic formatting |
+| lint | ruff, every rule including preview | 968 rules across 59 linters at ruff 0.16.1 |
+| types | ty, every rule at error | type errors, including unannotated bodies mypy skips |
+| dead code | vulture | unreachable functions, classes and names |
+| unused deps | deptry | declared-but-unused and used-but-undeclared |
+| vulnerabilities | pip-audit | PyPI Advisory Database plus OSV |
+| spelling | typos | misspellings in code, identifiers and filenames |
+| shell | shellcheck, shfmt | every shell script, every optional check on |
+| other files | dprint | toml, json, markdown, yaml, dockerfile, css, html |
 
 ## Strictness policy
 
@@ -59,10 +59,10 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 ## Earned disables
 
-| Rule          | Reason                                                                                        |
-| ------------- | --------------------------------------------------------------------------------------------- |
-| `D100`-`D107` | operator decision: code is self-explanatory rather than docstring-documented                  |
-| `CPY001`      | stands down unless the project declares its `notice-rgx`; enforced on every file once it does |
+| Rule | Reason |
+| --- | --- |
+| `D100`-`D107` | operator decision: code is self-explanatory rather than docstring-documented |
+| `CPY001` | stands down unless the project declares its `notice-rgx`; enforced on every file once it does |
 
 ## Configless
 

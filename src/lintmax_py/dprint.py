@@ -9,9 +9,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from .proc import filter_text, run
+
 HOST = "https://plugins.dprint.dev/"
 TIMEOUT = 15
 TTL_SECONDS = 6 * 60 * 60
+
+MARKDOWN_GLOB = "**/*.md"
 
 
 VERSION_SUFFIX = re.compile(r"[-@]v?\d+\.\d+\.\d+$")
@@ -96,3 +100,110 @@ def bump(plugins: list[str], *, force: bool = False) -> list[str]:
         out.append(latest or pinned)
     _store(plugins, out)
     return out
+
+
+TABLE_RULE = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+$")
+CELL_EDGE = re.compile(r"(?<!\\)\|")
+FENCE = re.compile(r"^\s*(?:```|~~~)")
+
+
+def _is_row(line: str) -> bool:
+    text = line.strip()
+    return len(text) > 1 and text.startswith("|") and text.endswith("|")
+
+
+def _cells(line: str) -> list[str]:
+    return [cell.strip() for cell in CELL_EDGE.split(line.strip())[1:-1]]
+
+
+def _dashes(cell: str) -> str:
+    left = ":" if cell.startswith(":") else ""
+    right = ":" if cell.endswith(":") else ""
+    return f"{left}---{right}"
+
+
+def _compact_row(line: str, *, rule: bool) -> str:
+    indent = line[: len(line) - len(line.lstrip())]
+    body = " | ".join(_dashes(cell) if rule else cell for cell in _cells(line))
+    return f"{indent}| {body} |"
+
+
+def compact_tables(text: str) -> str:
+    """Collapse a markdown table's alignment padding to one space at every cell boundary.
+
+    The formatter pads each cell out to its column's widest entry, which lines the table up for
+    someone reading the raw file and costs a token per space for the reader this gate is designed
+    for — on a wide table more of the file is padding than content, and the rendered document is
+    byte-identical either way. Only a genuine table is touched: a row is compacted when the line
+    below the header is the delimiter row, so a lone pipe in a paragraph and every line inside a
+    fenced block stay exactly as written.
+
+    Returns:
+        The text with every table row in its minimal form.
+
+    """
+    lines = text.split("\n")
+    out = list(lines)
+    fenced = False
+    index = 0
+    while index < len(lines):
+        if FENCE.match(lines[index]):
+            fenced = not fenced
+            index += 1
+            continue
+        rule = index + 1
+        opens = not fenced and _is_row(lines[index]) and rule < len(lines) and bool(TABLE_RULE.match(lines[rule].strip()))
+        if not opens:
+            index += 1
+            continue
+        while index < len(lines) and _is_row(lines[index]):
+            out[index] = _compact_row(lines[index], rule=index == rule)
+            index += 1
+    return "\n".join(out)
+
+
+def markdown_files(root: Path, config: Path) -> list[Path]:
+    """Ask the formatter which markdown files it would have handled.
+
+    Reproducing that set with a glob diverges the moment a project excludes a directory or ignores
+    a generated file: the sweep would rewrite a file the formatter itself never touches.
+
+    Returns:
+        The markdown files inside the project, in the formatter's own order.
+
+    """
+    listed = run(
+        ["dprint", "output-file-paths", "--config", str(config), MARKDOWN_GLOB],
+        cwd=str(root),
+    )
+    if listed.code != 0:
+        return []
+    return [Path(line) for line in listed.out.splitlines() if line.endswith(".md")]
+
+
+def sweep(root: Path, config: Path, *, fix: bool) -> list[str]:
+    """Format the markdown the main run leaves out, then compact its tables.
+
+    The main invocation excludes markdown so that its aligned output is never what lands on disk;
+    every markdown file is still formatted by the same plugin under the same config here, so
+    nothing about the check relaxes — a file that is not in its final form is still a finding.
+
+    Returns:
+        The files whose content differs from the wanted form, always empty after a fixing run.
+
+    """
+    stale: list[str] = []
+    for path in markdown_files(root, config):
+        text = path.read_text(encoding="utf-8")
+        rendered = filter_text(["dprint", "fmt", "--stdin", path.name, "--config", str(config)], text)
+        if rendered is None:
+            stale.append(f"{path}: markdown could not be formatted")
+            continue
+        wanted = compact_tables(rendered)
+        if wanted == text:
+            continue
+        if fix:
+            path.write_text(wanted, encoding="utf-8")
+        else:
+            stale.append(f"{path}: markdown not formatted (run fix)")
+    return stale
