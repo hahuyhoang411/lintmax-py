@@ -90,7 +90,7 @@ def _deptry_args(root: Path) -> list[str]:
         The arguments deptry is invoked with.
 
     """
-    args = ["."]
+    args: list[str] = ["."]
     packages = sorted({
         entry.name
         for parent in (root, root / "src")

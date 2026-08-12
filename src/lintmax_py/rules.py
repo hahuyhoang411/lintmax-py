@@ -13,11 +13,17 @@ def inventory() -> list[dict[str, object]]:
     if res.code != 0:
         msg = f"ruff rule --all failed: {res.out}"
         raise RuntimeError(msg)
-    parsed = json.loads(res.out)
+    parsed: object = json.loads(res.out)
     if not isinstance(parsed, list) or not parsed:
         msg = "ruff reported an empty rule set"
         raise RuntimeError(msg)
-    return parsed
+    inventory: list[dict[str, object]] = []
+    for rule in parsed:
+        if not isinstance(rule, dict):
+            msg = "ruff reported a malformed rule set"
+            raise TypeError(msg)
+        inventory.append({str(key): value for key, value in rule.items()})
+    return inventory
 
 
 def preview_codes(rules: list[dict[str, object]]) -> list[str]:
