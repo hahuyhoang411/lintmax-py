@@ -1,6 +1,6 @@
 [project]
 name = "lintmax-py"
-version = "0.0.7"
+version = "0.0.8"
 description = "Maximum-strictness Python quality gate: ruff + ty, all rules, always latest, one command"
 readme = "README.md"
 requires-python = ">=3.11"
