@@ -56,7 +56,10 @@ def ensure() -> list[str]:
     for package, exe in TOOLS.items():
         if not refresh and have(exe):
             continue
-        res = run(["uv", "tool", "install", "--quiet", f"{package}@latest"], timeout=900)
+        res = run(
+            ["uv", "tool", "install", "--force", "--quiet", f"{package}@latest"],
+            timeout=900,
+        )
         if not have(exe):
             reason = res.out or f"exit {res.code}"
             missing.append(f"{exe}: install of {package} did not produce it ({reason})")
