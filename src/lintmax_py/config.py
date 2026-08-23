@@ -187,7 +187,9 @@ def _typos_section(path: Path) -> dict[str, object] | None:
     if not isinstance(node, dict):
         return None
     default = node.get("default")
-    return default if isinstance(default, dict) else None
+    if not isinstance(default, dict):
+        return None
+    return {str(key): value for key, value in default.items()}
 
 
 def typos_toml(root: Path) -> str:

@@ -17,7 +17,13 @@ def inventory() -> list[dict[str, object]]:
     if not isinstance(parsed, list) or not parsed:
         msg = "ruff reported an empty rule set"
         raise RuntimeError(msg)
-    return parsed
+    inventory: list[dict[str, object]] = []
+    for rule in parsed:
+        if not isinstance(rule, dict):
+            msg = "ruff reported a non-object rule"
+            raise TypeError(msg)
+        inventory.append({str(key): value for key, value in rule.items()})
+    return inventory
 
 
 def preview_codes(rules: list[dict[str, object]]) -> list[str]:
