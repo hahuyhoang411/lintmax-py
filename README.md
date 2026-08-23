@@ -10,7 +10,7 @@ Python ships no strictness by default: no compiler, no unused-import error, no t
 
 ## Never stale
 
-No tool version is ever pinned. Ruff, ty and every child tool are fetched at latest on each run, and the rule set is DERIVED from the installed ruff rather than listed — so the moment ruff ships a new rule, your gate runs it. Dependency staleness is scanned against upstream every run.
+No tool version is ever pinned. Ruff, ty and every child tool are fetched at latest on each run, and the rule set is DERIVED from the installed ruff rather than listed — so the moment ruff ships a new rule, your gate runs it. Direct dependency staleness is resolved through an upgrading `uv lock --dry-run`, so the gate reports only releases the project's declared constraints can install. An exact pin is a project decision, not perpetual staleness.
 
 dprint plugins resolve through each plugin's `latest.json` and the concrete versioned URL is written back. A constant floating URL is deliberately NOT used: dprint caches a plugin by its URL, so an unchanging URL resolves once and then freezes silently, which is the exact staleness the floating form appears to solve.
 
@@ -32,7 +32,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 - Child tools reinstalled at latest on a refresh cadence; CI always forces latest.
 - The binary refreshes itself in CI before gating.
 - No green-tree-hash cache: measured on 10,039 real files with all 968 rules, a full ruff run costs 4.3s while hashing the tree to skip it costs 2.6s, so the cache buys ~40% in its best case and adds a false-green failure mode. The expensive work is the network, and that is TTL-cached instead.
-- Dependency staleness scanned against upstream every run.
+- Direct dependency staleness resolved against the project's constraints every run.
 
 ## What runs
 
@@ -46,7 +46,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 | unused deps | deptry | declared-but-unused and used-but-undeclared |
 | vulnerabilities | pip-audit | PyPI Advisory Database plus OSV |
 | spelling | typos | misspellings in code, identifiers and filenames |
-| shell | shellcheck, shfmt | every shell script, every optional check on |
+| shell | shellcheck, shfmt, zsh -n | ShellCheck and shfmt for supported shells; zsh scripts use zsh's own parser |
 | other files | dprint | toml, json, markdown, yaml, dockerfile, css, html |
 
 ## Strictness policy

@@ -1,20 +1,42 @@
 # Copyright (c) lintmax-py contributors. Licensed under the MIT License.
 from __future__ import annotations
 
-import json
 import os
 import re
-import urllib.error
-import urllib.request
 from typing import TYPE_CHECKING
 
 import tomllib
 
+from .proc import Result, run
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-TIMEOUT = 15
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+")
+UPDATE_RE = re.compile(
+    r"^Update (?P<name>\S+) v(?P<current>\S+) -> v(?P<newest>\S+)$",
+    re.MULTILINE,
+)
+
+
+class ResolutionUnavailableError(RuntimeError):
+    """Raised when uv cannot produce the resolver evidence staleness needs.
+
+    A nonzero ``uv lock --upgrade --dry-run`` does not mean that dependencies are current. It
+    means the gate has no trustworthy answer, which must fail the check rather than become a
+    silent false green.
+    """
+
+    def __init__(self, result: Result) -> None:
+        self.result = result
+        output = result.out or "no output"
+        super().__init__(
+            f"uv lock --upgrade --dry-run could not establish staleness evidence (exit {result.code}): {output}",
+        )
+
+
+def canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def skip() -> bool:
@@ -36,7 +58,7 @@ def declared(root: Path) -> list[str]:
     for spec in specs:
         match = NAME_RE.match(spec.strip())
         if match:
-            names.append(match.group(0).lower())
+            names.append(canonical(match.group(0)))
     return sorted(set(names))
 
 
@@ -46,35 +68,27 @@ def locked(root: Path) -> dict[str, str]:
         return {}
     data = tomllib.loads(lock.read_text(encoding="utf-8"))
     return {
-        str(pkg["name"]).lower(): str(pkg["version"])
+        canonical(str(pkg["name"])): str(pkg["version"])
         for pkg in data.get("package", [])
         if "name" in pkg and "version" in pkg
     }
 
 
-def latest(name: str) -> str | None:
-    try:
-        with urllib.request.urlopen(
-            f"https://pypi.org/pypi/{name}/json",
-            timeout=TIMEOUT,
-        ) as response:
-            body = json.load(response)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
-        return None
-    version = body.get("info", {}).get("version")
-    return str(version) if version else None
-
-
 def behind(root: Path) -> list[str]:
     if skip():
         return []
-    pinned = locked(root)
-    stale: list[str] = []
-    for name in declared(root):
-        current = pinned.get(name)
-        if current is None:
-            continue
-        newest = latest(name)
-        if newest is not None and newest != current:
-            stale.append(f"{name} {current} -> {newest}")
-    return stale
+    direct = set(declared(root))
+    if not direct or not locked(root):
+        return []
+    result = run(
+        ["uv", "lock", "--upgrade", "--dry-run", "--no-progress", "--color", "never"],
+        cwd=str(root),
+        timeout=60,
+    )
+    if result.code != 0:
+        raise ResolutionUnavailableError(result)
+    return [
+        f"{match['name']} {match['current']} -> {match['newest']}"
+        for match in UPDATE_RE.finditer(result.out)
+        if canonical(match["name"]) in direct
+    ]
