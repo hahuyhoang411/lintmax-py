@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lintmax_py import gate
+from lintmax_py import cli, gate
 from lintmax_py.proc import Result
 
 if TYPE_CHECKING:
@@ -19,6 +19,354 @@ def _record(calls: list[str]) -> Callable[..., Result]:
         return Result(code=0, out="")
 
     return fake
+
+
+def test_explicit_absolute_uv_project_environment_selects_the_shared_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit uv environment belongs to the checked project, not the gate checkout."""
+    root = tmp_path / "project"
+    root.mkdir()
+    shared_environment = tmp_path / "shared-environment"
+    shared_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(shared_environment))
+
+    environment, error = gate._environment(root)
+
+    assert environment == ["--python", str(shared_environment)]
+    assert error is None
+
+
+def test_absolute_uv_project_environment_bypasses_an_invalid_workspace_member_glob(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absolute environment needs no workspace lookup and cannot be broken by its config."""
+    workspace = tmp_path / "workspace"
+    member = workspace / "member"
+    member.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.0.0"\n\n[tool.uv.workspace]\nmembers = ["/not-a-relative-glob"]\n',
+        encoding="utf-8",
+    )
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    shared_environment = tmp_path / "shared-environment"
+    shared_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(shared_environment))
+
+    environment, error = gate._environment(member)
+
+    assert environment == ["--python", str(shared_environment)]
+    assert error is None
+
+
+def test_relative_uv_project_environment_is_resolved_from_a_standalone_checked_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller's checkout cannot reinterpret a target project's relative uv path."""
+    root = tmp_path / "project"
+    root.mkdir()
+    environment_directory = root / ".shared-environment"
+    environment_directory.mkdir()
+    caller_directory = tmp_path / "different-checkout"
+    caller_directory.mkdir()
+    monkeypatch.chdir(caller_directory)
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", ".shared-environment")
+
+    environment, error = gate._environment(root)
+
+    assert environment == ["--python", str(environment_directory)]
+    assert error is None
+
+
+def test_relative_uv_project_environment_is_resolved_from_the_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A member uses the shared workspace path even when the gate is invoked for that member."""
+    workspace = tmp_path / "workspace"
+    member = workspace / "packages" / "member"
+    member.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.0.0"\n\n[tool.uv.workspace]\nmembers = ["packages/*"]\n',
+        encoding="utf-8",
+    )
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    shared_environment = workspace / ".shared-environment"
+    shared_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", ".shared-environment")
+
+    environment, error = gate._environment(member)
+
+    assert environment == ["--python", str(shared_environment)]
+    assert error is None
+
+
+def test_workspace_member_source_subdirectory_uses_the_workspace_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checked source subdirectory inherits its enclosing member's workspace environment."""
+    workspace = tmp_path / "workspace"
+    member = workspace / "packages" / "member"
+    source_directory = member / "src"
+    source_directory.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.0.0"\n\n[tool.uv.workspace]\nmembers = ["packages/*"]\n',
+        encoding="utf-8",
+    )
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    shared_environment = workspace / ".shared-environment"
+    shared_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", ".shared-environment")
+
+    environment, error = gate._environment(source_directory)
+
+    assert environment == ["--python", str(shared_environment)]
+    assert error is None
+
+
+def test_ancestor_workspace_does_not_capture_a_project_outside_its_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only declared members inherit a workspace environment path."""
+    workspace = tmp_path / "workspace"
+    outsider = workspace / "outside"
+    outsider.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.0.0"\n\n[tool.uv.workspace]\nmembers = ["packages/*"]\n',
+        encoding="utf-8",
+    )
+    (outsider / "pyproject.toml").write_text(
+        '[project]\nname = "outside"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    (workspace / ".shared-environment").mkdir()
+    local_environment = outsider / ".shared-environment"
+    local_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", ".shared-environment")
+
+    environment, error = gate._environment(outsider)
+
+    assert environment == ["--python", str(local_environment)]
+    assert error is None
+
+
+def test_relative_uv_project_environment_ignores_an_invalid_workspace_member_glob(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed workspace pattern cannot crash the gate or redirect a standalone environment."""
+    workspace = tmp_path / "workspace"
+    member = workspace / "member"
+    member.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.0.0"\n\n[tool.uv.workspace]\nmembers = ["/not-a-relative-glob"]\n',
+        encoding="utf-8",
+    )
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    local_environment = member / ".shared-environment"
+    local_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", ".shared-environment")
+
+    environment, error = gate._environment(member)
+
+    assert environment == ["--python", str(local_environment)]
+    assert error is None
+
+
+def test_explicit_uv_project_environment_precedes_the_checked_root_dot_venv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit uv configuration wins even when the checked project has a local environment."""
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".venv").mkdir()
+    shared_environment = tmp_path / "shared-environment"
+    shared_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(shared_environment))
+
+    environment, error = gate._environment(root)
+
+    assert environment == ["--python", str(shared_environment)]
+    assert error is None
+
+
+def test_unset_uv_project_environment_falls_back_to_checked_root_dot_venv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The original local-environment behavior remains when uv has no explicit path."""
+    root = tmp_path / "project"
+    root.mkdir()
+    local_environment = root / ".venv"
+    local_environment.mkdir()
+    monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+
+    environment, error = gate._environment(root)
+
+    assert environment == ["--python", str(local_environment)]
+    assert error is None
+
+
+def test_standalone_project_source_subdirectory_uses_the_project_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checked source subdirectory inherits its enclosing standalone project's environment."""
+    project = tmp_path / "project"
+    source_directory = project / "src"
+    source_directory.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "project"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    local_environment = project / ".shared-environment"
+    local_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", ".shared-environment")
+
+    environment, error = gate._environment(source_directory)
+
+    assert environment == ["--python", str(local_environment)]
+    assert error is None
+
+
+def test_invalid_explicit_uv_project_environment_reports_a_ty_finding_without_running_ty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured missing path or file must fail rather than silently selecting another environment."""
+    root = tmp_path / "project"
+    root.mkdir()
+    non_directory = tmp_path / "not-an-environment"
+    non_directory.write_text("not a directory", encoding="utf-8")
+
+    for candidate in (tmp_path / "missing-environment", non_directory):
+        calls: list[str] = []
+        monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(candidate))
+        monkeypatch.setattr(gate, "run", _record(calls))
+
+        findings = gate._python_stages(root, root, fix=False)
+
+        assert findings == [
+            gate.Finding(
+                stage="ty",
+                detail=f"UV_PROJECT_ENVIRONMENT must name an existing directory: {candidate}",
+            ),
+        ]
+        assert "ty" not in calls
+
+
+def test_empty_uv_project_environment_falls_back_to_the_workspace_default_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uv treats an empty path as unset and selects the workspace default environment."""
+    workspace = tmp_path / "workspace"
+    member = workspace / "packages" / "member"
+    member.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.0.0"\n\n[tool.uv.workspace]\nmembers = ["packages/*"]\n',
+        encoding="utf-8",
+    )
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    default_environment = workspace / ".venv"
+    default_environment.mkdir()
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "")
+
+    environment, error = gate._environment(member)
+
+    assert environment == ["--python", str(default_environment)]
+    assert error is None
+
+
+def test_ty_runs_from_the_checked_projects_root_not_the_gate_callers_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ty must discover target configuration and editable sources from the checked project."""
+    project = tmp_path / "project"
+    source_directory = project / "src"
+    source_directory.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "project"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    (project / ".venv").mkdir()
+    other_checkout = tmp_path / "different-checkout"
+    other_checkout.mkdir()
+    monkeypatch.chdir(other_checkout)
+    monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+    calls: list[tuple[list[str], str | None]] = []
+
+    def record(cmd: list[str], **kwargs: object) -> Result:
+        cwd = kwargs.get("cwd")
+        assert cwd is None or isinstance(cwd, str)
+        calls.append((cmd, cwd))
+        return Result(code=0, out="")
+
+    monkeypatch.setattr(gate, "run", record)
+
+    findings = gate._python_stages(source_directory, source_directory, fix=False)
+
+    assert findings == []
+    ty_command, ty_cwd = next((command, cwd) for command, cwd in calls if command[0] == "ty")
+    assert ty_command == [
+        "ty",
+        "check",
+        "--error",
+        "all",
+        "--project",
+        str(project),
+        "--python",
+        str(project / ".venv"),
+        str(source_directory),
+    ]
+    assert ty_cwd == str(project)
+
+
+def test_cli_prints_an_invalid_explicit_uv_project_environment_as_a_ty_finding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The command exits non-zero with a readable configuration error, not an uncaught exception."""
+    root = tmp_path / "project"
+    root.mkdir()
+    missing_environment = tmp_path / "missing-environment"
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(missing_environment))
+    monkeypatch.setattr(gate, "run", _record([]))
+    monkeypatch.setattr(
+        cli,
+        "run_gate",
+        lambda checked_root, *, fix: gate._python_stages(checked_root, checked_root, fix=fix),
+    )
+
+    exit_code = cli.main(["check", str(root)])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err == (
+        f"ty: UV_PROJECT_ENVIRONMENT must name an existing directory: {missing_environment}\n"
+    )
 
 
 def test_the_formatter_runs_before_the_checker_it_can_invalidate(
