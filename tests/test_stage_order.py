@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from lintmax_py import cli, gate
-from lintmax_py.proc import Result
+from lintmax_py.proc import Result, run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -463,3 +463,82 @@ def test_supported_shell_shebangs_stay_formatted_before_shellcheck(
         assert str(script) in commands[shfmt_index]
         assert str(script) in commands[shellcheck_index]
     assert all(command[0] != "zsh" for command in commands)
+
+
+def _disable_gate_stages(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    """Isolate the orchestration boundary from external linters for safety tests."""
+    monkeypatch.setattr(gate.tools, "ensure", list)
+    monkeypatch.setattr(gate.rules, "inventory", list)
+    monkeypatch.setattr(gate.config, "materialize", lambda *_args: (root, "digest"))
+    monkeypatch.setattr(gate, "_python_stages", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(gate, "_repo_stages", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(gate, "_staleness_stages", lambda *_args, **_kwargs: [])
+
+
+def test_fix_preserves_an_ordinary_rationale_comment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A quality gate may not erase the rationale a maintainer left beside code."""
+    source = tmp_path / "module.py"
+    original = "answer = 42  # why this clinical threshold exists\n"
+    source.write_text(original, encoding="utf-8")
+    _disable_gate_stages(monkeypatch, tmp_path)
+
+    assert gate.run_gate(tmp_path, fix=True) == []
+    assert source.read_text(encoding="utf-8") == original
+
+
+def test_check_does_not_report_an_ordinary_provenance_comment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Comments are not a lint defect without a sound, purpose-built detector."""
+    source = tmp_path / "module.py"
+    source.write_text("# derived from the published corpus receipt\nanswer = 42\n", encoding="utf-8")
+    _disable_gate_stages(monkeypatch, tmp_path)
+
+    assert gate.run_gate(tmp_path, fix=False) == []
+    assert source.read_text(encoding="utf-8") == "# derived from the published corpus receipt\nanswer = 42\n"
+
+
+def test_fix_requests_only_ruff_safe_fixes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix mode must retain Ruff's safe fixes while declining unsafe rewrites."""
+    commands: list[list[str]] = []
+
+    def record(command: list[str], **_kwargs: object) -> Result:
+        commands.append(command)
+        return Result(code=0, out="")
+
+    monkeypatch.setattr(gate, "run", record)
+
+    assert gate._python_stages(tmp_path, tmp_path, fix=True) == []
+    ruff_check = next(command for command in commands if command[:2] == ["ruff", "check"])
+    assert "--fix" in ruff_check
+    assert "--unsafe-fixes" not in ruff_check
+
+
+def test_fix_executes_a_ruff_safe_fix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The safety boundary must not turn Ruff's ordinary repairs into a no-op."""
+    config = tmp_path / "ruff.toml"
+    config.write_text('[lint]\nselect = ["F401"]\n', encoding="utf-8")
+    source = tmp_path / "module.py"
+    source.write_text("import os\n", encoding="utf-8")
+
+    def run_ruff(command: list[str], **kwargs: object) -> Result:
+        if command[0] == "ruff":
+            cwd = kwargs.get("cwd")
+            assert cwd is None or isinstance(cwd, str)
+            return run(command, cwd=cwd)
+        return Result(code=0, out="")
+
+    monkeypatch.setattr(gate, "run", run_ruff)
+
+    assert gate._python_stages(tmp_path, tmp_path, fix=True) == []
+    assert "import os" not in source.read_text(encoding="utf-8")

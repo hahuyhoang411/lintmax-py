@@ -8,7 +8,7 @@ from pathlib import Path
 
 import tomllib
 
-from . import comments, config, dprint, rules, staleness, tools
+from . import config, dprint, rules, staleness, tools
 from .paths import SKIP_DIRS, skipped
 from .proc import Result, have, run
 
@@ -48,7 +48,7 @@ def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         found += _stage("ruff format", run(["ruff", "format", *ruff_common, str(root)]))
         found += _stage(
             "ruff check",
-            run(["ruff", "check", "--fix", "--unsafe-fixes", *ruff_common, str(root)]),
+            run(["ruff", "check", "--fix", *ruff_common, str(root)]),
         )
     else:
         found += _stage("ruff format", run(["ruff", "format", "--check", *ruff_common, str(root)]))
@@ -392,13 +392,6 @@ def run_gate(root: Path, *, fix: bool) -> list[Finding]:
     findings = [Finding(stage="toolchain", detail=m) for m in missing]
     inventory = rules.inventory()
     cfg, _digest = config.materialize(inventory, root)
-
-    if fix:
-        comments.strip_tree(root)
-    else:
-        findings += [
-            Finding(stage="comments", detail=f"{path}: strippable comment (run fix)") for path in comments.offenders(root)
-        ]
 
     findings += _python_stages(root, cfg, fix=fix)
     findings += _repo_stages(root, cfg, fix=fix)
