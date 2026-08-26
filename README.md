@@ -19,7 +19,7 @@ dprint plugins resolve through each plugin's `latest.json` and the concrete vers
 Exactly four commands — the lean agent-first surface:
 
 ```
-lintmax-py fix      # format + autofix + full gate — the default action
+lintmax-py fix      # format + Ruff safe autofix + full gate — the default action
 lintmax-py check    # verify only, no writes (CI mode) — same exhaustive scanner set
 lintmax-py version  # print version
 lintmax-py rules    # list every enabled rule under the maxed config
@@ -38,7 +38,6 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 | Layer | Tool | Catches |
 | --- | --- | --- |
-| comments | native (`tokenize`) | deletes every `#` comment except directives; docstrings survive |
 | format | ruff format | deterministic formatting |
 | lint | ruff, every rule including preview | 968 rules across 59 linters at ruff 0.16.1 |
 | types | ty, every rule at error | type errors, including unannotated bodies mypy skips |
@@ -54,6 +53,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 - The ruff rule set is derived from `ruff rule --all`, so a newly shipped rule is enabled the run after it lands. `ALL` alone is not enough: preview rules require their exact code.
 - Every rule is error or off, never warn.
 - ty runs with all rules at error severity.
+- `fix` applies only Ruff's safe fixes; unsafe rewrites remain findings for explicit review.
 - Ruff's own conflicting-rule pairs resolve to the stricter member.
 - The disable list starts EMPTY. Each entry is earned by a concrete conflict found on real code, never anticipated, and carries its reason.
 
