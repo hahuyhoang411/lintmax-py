@@ -1,6 +1,7 @@
 # Copyright (c) lintmax-py contributors. Licensed under the MIT License.
 from __future__ import annotations
 
+import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +53,18 @@ def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
     else:
         found += _stage("ruff format", run(["ruff", "format", "--check", *ruff_common, str(root)]))
         found += _stage("ruff check", run(["ruff", "check", *ruff_common, str(root)]))
-    found += _stage("ty", run(["ty", "check", "--error", "all", *_environment(root), str(root)]))
+    project_root = _project_root(root)
+    environment, environment_error = _environment(root)
+    if environment_error:
+        found.append(Finding(stage="ty", detail=environment_error))
+    else:
+        found += _stage(
+            "ty",
+            run(
+                ["ty", "check", "--error", "all", "--project", str(project_root), *environment, str(root)],
+                cwd=str(project_root),
+            ),
+        )
     excluded = ",".join(f"*/{name}/*" for name in sorted(SKIP_DIRS))
     allowances = config.vulture_allowances(root)
     vulture_args = ["vulture", "--exclude", excluded]
@@ -62,7 +74,7 @@ def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
     return found
 
 
-def _environment(root: Path) -> list[str]:
+def _environment(root: Path) -> tuple[list[str], str | None]:
     """Point the type checker at the TARGET project's environment rather than the gate's own.
 
     A checker resolving imports against whatever venv the gate happens to run from reports every
@@ -70,12 +82,127 @@ def _environment(root: Path) -> list[str]:
     identical in shape to a project with no dependencies installed, and it appears only when the
     gate is run from a different checkout than the one it is checking.
 
+    uv resolves a relative ``UV_PROJECT_ENVIRONMENT`` from the workspace root. The gate discovers
+    that root from the checked project instead of inheriting the gate process's current directory.
+    An empty setting behaves as unset, so it retains the default workspace ``.venv``.
+
     Returns:
-        The environment flag, or nothing when the project has no environment of its own.
+        The environment flag and no error, or an error for an explicit invalid environment.
 
     """
-    venv = root / ".venv"
-    return ["--python", str(venv)] if venv.is_dir() else []
+    configured = os.environ.get("UV_PROJECT_ENVIRONMENT")
+    if configured:
+        candidate = Path(configured)
+        if candidate.is_absolute():
+            venv = candidate
+        else:
+            workspace_root = _workspace_root(_project_root(root))
+            venv = workspace_root / candidate
+        venv = venv.resolve()
+        if not venv.is_dir():
+            return [], f"UV_PROJECT_ENVIRONMENT must name an existing directory: {venv}"
+        return ["--python", str(venv)], None
+    workspace_root = _workspace_root(_project_root(root))
+    venv = workspace_root / ".venv"
+    return (["--python", str(venv)], None) if venv.is_dir() else ([], None)
+
+
+def _project_root(root: Path) -> Path:
+    """Return the nearest ancestor declaring a Python project, or the resolved checked directory.
+
+    Both uv and Ty discover project configuration by walking up from a supplied directory. The
+    gate must make that discovery before it looks for a workspace or chooses Ty's working directory
+    because a source subdirectory is not itself the project whose environment owns its imports.
+
+    Returns:
+        The nearest directory with ``pyproject.toml``, or the resolved checked directory.
+
+    """
+    target = root.resolve()
+    for candidate in (target, *target.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return target
+
+
+def _workspace_root(root: Path) -> Path:
+    """Return the workspace root that owns ``root``, or ``root`` when it is standalone.
+
+    uv treats the directory declaring ``[tool.uv.workspace]`` as the workspace root, but only
+    projects selected by its ``members`` globs inherit that root. A neighboring project outside
+    those globs remains standalone even when the gate runs beneath the same repository.
+
+    Returns:
+        The matching workspace root, or the resolved checked root when no workspace owns it.
+
+    """
+    target = _project_root(root)
+    for candidate in (target, *target.parents):
+        workspace = _workspace_config(candidate)
+        if workspace is not None and _workspace_includes(target, candidate, workspace):
+            return candidate
+    return target
+
+
+def _workspace_config(root: Path) -> dict[str, object] | None:
+    """Read the workspace declaration from one candidate root, if it has one.
+
+    Returns:
+        The declaration with string keys, or nothing when the candidate is not a workspace root.
+
+    """
+    try:
+        manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    tool = manifest.get("tool")
+    if not isinstance(tool, dict):
+        return None
+    uv = tool.get("uv")
+    if not isinstance(uv, dict):
+        return None
+    workspace = uv.get("workspace")
+    if not isinstance(workspace, dict):
+        return None
+    configuration: dict[str, object] = {key: value for key, value in workspace.items() if isinstance(key, str)}
+    return configuration
+
+
+def _workspace_includes(target: Path, root: Path, workspace: dict[str, object]) -> bool:
+    """Return whether one target project is the root or a non-excluded workspace member.
+
+    Returns:
+        Whether the workspace owns the target project.
+
+    """
+    if target == root:
+        return True
+    return _matches_workspace_glob(target, root, workspace.get("members")) and not _matches_workspace_glob(
+        target,
+        root,
+        workspace.get("exclude"),
+    )
+
+
+def _matches_workspace_glob(target: Path, root: Path, patterns: object) -> bool:
+    """Match one resolved project directory against uv's workspace member-style path globs.
+
+    Returns:
+        Whether any valid glob expands to the target project directory.
+
+    """
+    if not isinstance(patterns, list):
+        return False
+    for pattern in patterns:
+        if not isinstance(pattern, str):
+            continue
+        try:
+            candidates = root.glob(pattern)
+            if any(candidate.resolve() == target for candidate in candidates):
+                return True
+        except (NotImplementedError, OSError, ValueError):
+            continue
+    return False
 
 
 def _deptry_args(root: Path) -> list[str]:
