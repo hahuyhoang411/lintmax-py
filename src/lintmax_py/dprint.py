@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import re
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from .proc import filter_text, run
@@ -14,11 +13,13 @@ from .proc import filter_text, run
 HOST = "https://plugins.dprint.dev/"
 TIMEOUT = 15
 TTL_SECONDS = 6 * 60 * 60
+SUCCESS_STATUS = 200
 
 MARKDOWN_GLOB = "**/*.md"
 
 
 VERSION_SUFFIX = re.compile(r"[-@]v?\d+\.\d+\.\d+$")
+PLUGIN_PATH = re.compile(r"^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*)?$")
 
 
 def plugin_name(file: str) -> str:
@@ -49,11 +50,25 @@ def plugin_path(pinned: str) -> str | None:
 
 
 def latest_url(path: str) -> str | None:
-    try:
-        with urllib.request.urlopen(f"{HOST}{path}/latest.json", timeout=TIMEOUT) as response:  # ruff: ignore[suspicious-url-open-usage]
-            body = json.load(response)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+    if not PLUGIN_PATH.fullmatch(path):
         return None
+    connection = http.client.HTTPSConnection("plugins.dprint.dev", timeout=TIMEOUT)
+    try:
+        connection.request("GET", f"/{path}/latest.json")
+        response = connection.getresponse()
+        if response.status != SUCCESS_STATUS:
+            return None
+        body = json.loads(response.read())
+    except (
+        http.client.HTTPException,
+        TimeoutError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        OSError,
+    ):
+        return None
+    finally:
+        connection.close()
     url = body.get("url") if isinstance(body, dict) else None
     return url if isinstance(url, str) and url.startswith(HOST) else None
 
@@ -100,6 +115,10 @@ def bump(plugins: list[str], *, force: bool = False) -> list[str]:
         out.append(latest or pinned)
     _store(plugins, out)
     return out
+
+
+class MarkdownEnumerationError(RuntimeError):
+    """dprint could not name the markdown files the gate must check."""
 
 
 TABLE_RULE = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+$")
@@ -162,7 +181,7 @@ def compact_tables(text: str) -> str:
     return "\n".join(out)
 
 
-def markdown_files(root: Path, config: Path) -> list[Path]:
+def markdown_files(root: Path, config: Path, executable: str) -> list[Path]:
     """Ask the formatter which markdown files it would have handled.
 
     Reproducing that set with a glob diverges the moment a project excludes a directory or ignores
@@ -171,17 +190,22 @@ def markdown_files(root: Path, config: Path) -> list[Path]:
     Returns:
         The markdown files inside the project, in the formatter's own order.
 
+    Raises:
+        MarkdownEnumerationError: dprint could not enumerate its markdown input set.
+
     """
     listed = run(
-        ["dprint", "output-file-paths", "--config", str(config), MARKDOWN_GLOB],
+        [executable, "output-file-paths", "--config", str(config), MARKDOWN_GLOB],
         cwd=str(root),
     )
     if listed.code != 0:
-        return []
+        detail = listed.out or f"exit {listed.code} with no output"
+        message = f"dprint output-file-paths failed: {detail}"
+        raise MarkdownEnumerationError(message)
     return [Path(line) for line in listed.out.splitlines() if line.endswith(".md")]
 
 
-def sweep(root: Path, config: Path, *, fix: bool) -> list[str]:
+def sweep(root: Path, config: Path, executable: str, *, fix: bool) -> list[str]:
     """Format the markdown the main run leaves out, then compact its tables.
 
     The main invocation excludes markdown so that its aligned output is never what lands on disk;
@@ -192,10 +216,14 @@ def sweep(root: Path, config: Path, *, fix: bool) -> list[str]:
         The files whose content differs from the wanted form, always empty after a fixing run.
 
     """
+    try:
+        files = markdown_files(root, config, executable)
+    except MarkdownEnumerationError as error:
+        return [str(error)]
     stale: list[str] = []
-    for path in markdown_files(root, config):
+    for path in files:
         text = path.read_text(encoding="utf-8")
-        rendered = filter_text(["dprint", "fmt", "--stdin", path.name, "--config", str(config)], text)
+        rendered = filter_text([executable, "fmt", "--stdin", path.name, "--config", str(config)], text)
         if rendered is None:
             stale.append(f"{path}: markdown could not be formatted")
             continue

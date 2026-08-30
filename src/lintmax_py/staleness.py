@@ -74,14 +74,22 @@ def locked(root: Path) -> dict[str, str]:
     }
 
 
-def behind(root: Path) -> list[str]:
+def behind(root: Path, uv_command: tuple[str, ...]) -> list[str]:
     if skip():
         return []
     direct = set(declared(root))
     if not direct or not locked(root):
         return []
     result = run(
-        ["uv", "lock", "--upgrade", "--dry-run", "--no-progress", "--color", "never"],
+        [
+            *uv_command,
+            "lock",
+            "--upgrade",
+            "--dry-run",
+            "--no-progress",
+            "--color",
+            "never",
+        ],
         cwd=str(root),
         timeout=60,
     )

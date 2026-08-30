@@ -4,15 +4,33 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
-from lintmax_py import cli, config, gate, rules
+from lintmax_py import cli, config, gate, rules, tools
 from lintmax_py.proc import Result
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+def _ruff(executable: str = "/frozen/ruff") -> tools.Tool:
+    return tools.Tool(
+        package="ruff",
+        executable="ruff",
+        path=Path(executable),
+        version="ruff test",
+    )
+
+
+def _toolchain(executable: str = "/frozen/ruff") -> tools.Toolchain:
+    ruff = _ruff(executable)
+    uvx_path = Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx").resolve()
+    metadata = uvx_path.stat()
+    return tools.Toolchain(
+        tools={"ruff": ruff},
+        generation=ruff.path.parent,
+        uvx=tools.UvxLauncher(uvx_path, metadata.st_dev, metadata.st_ino, "uv test"),
+        zsh=None,
+    )
 
 
 def test_inventory_rejects_non_object_rules_from_ruff(
@@ -26,7 +44,7 @@ def test_inventory_rejects_non_object_rules_from_ruff(
     )
 
     with pytest.raises(rules.RuffInventoryUnavailableError, match="non-object"):
-        rules.inventory()
+        rules.inventory(_ruff())
 
 
 def test_inventory_preserves_a_valid_rule_object(
@@ -41,9 +59,11 @@ def test_inventory_preserves_a_valid_rule_object(
         ),
     )
 
-    inventory = rules.inventory()
-    assert inventory == [{"code": "F401", "preview": False}]
-    assert rules.selection(inventory) == ["ALL"]
+    inventory = rules.inventory(_ruff())
+    assert [dict(rule) for rule in inventory.rules] == [
+        {"code": "F401", "preview": False},
+    ]
+    assert rules.selection(inventory.rules) == ["ALL"]
 
 
 @pytest.mark.parametrize("code", [42, "", "None"])
@@ -67,7 +87,7 @@ def test_inventory_rejects_an_unselectable_rule_code(
         "inventory defect or use a Ruff release with a complete inventory."
     )
     with pytest.raises(rules.RuffInventoryUnavailableError, match=re.escape(expected)):
-        rules.inventory()
+        rules.inventory(_ruff())
 
 
 def test_generated_config_uses_a_rule_name_when_ruff_has_no_code(
@@ -137,14 +157,14 @@ def test_unselectable_null_code_rule_blocks_every_public_command(
                 code=2,
                 out="error: invalid value 'made-up-rule' for '[RULE]'",
             )
-        pytest.fail(f"unexpected Ruff command: {argv}")
+        message = f"unexpected Ruff command: {argv}"
+        raise AssertionError(message)
 
     def fail_materialize(*_args: object, **_kwargs: object) -> None:
         pytest.fail("must not materialize an invalid Ruff config")
 
-    monkeypatch.setattr(rules.shutil, "which", lambda _name: executable)
     monkeypatch.setattr(rules, "run", frozen_run)
-    monkeypatch.setattr(gate.tools, "ensure", list)
+    monkeypatch.setattr(gate.tools, "ensure", lambda: _toolchain(executable))
     monkeypatch.setattr(gate.config, "materialize", fail_materialize)
 
     argv = [command] if command == "rules" else [command, str(tmp_path)]
@@ -177,7 +197,7 @@ def test_inventory_rejects_duplicate_selectors(monkeypatch: pytest.MonkeyPatch) 
         rules.RuffInventoryUnavailableError,
         match="duplicate selector 'F401'",
     ):
-        rules.inventory()
+        rules.inventory(_ruff())
 
 
 def test_inventory_preserves_the_subprocess_failure_output(
@@ -194,7 +214,7 @@ def test_inventory_preserves_the_subprocess_failure_output(
         rules.RuffInventoryUnavailableError,
         match="ruff rule --all failed with exit 7: ruff internals failed",
     ):
-        rules.inventory()
+        rules.inventory(_ruff())
 
 
 @pytest.mark.parametrize("output", ["not-json", "[]", '{"code": "F401"}'])
@@ -210,7 +230,7 @@ def test_inventory_rejects_unusable_ruff_output(
     )
 
     with pytest.raises(rules.RuffInventoryUnavailableError):
-        rules.inventory()
+        rules.inventory(_ruff())
 
 
 def test_cli_reports_inventory_unavailability_without_a_traceback(
@@ -238,6 +258,7 @@ def test_ruff_0165_null_rule_name_is_selected_and_reported(
     ruff = shutil.which("ruff")
     if ruff is None:
         pytest.skip("Ruff is not installed")
+        return
     real_run = rules.run
     version = real_run([ruff, "--version"])
     if version.out != "ruff 0.16.5":
@@ -258,15 +279,16 @@ def test_ruff_0165_null_rule_name_is_selected_and_reported(
             return captured_inventory
         if argv == [ruff, "rule", rule_name]:
             return captured_name_probe
-        pytest.fail(f"unexpected Ruff command: {argv}")
+        message = f"unexpected Ruff command: {argv}"
+        raise AssertionError(message)
 
     monkeypatch.setattr(
         rules,
         "run",
         frozen_run,
     )
-    inventory = rules.inventory()
-    generated = config.ruff_toml(inventory, tmp_path)
+    inventory = rules.inventory(_ruff(ruff))
+    generated = config.ruff_toml(list(inventory.rules), tmp_path)
     config_path = tmp_path / "ruff.toml"
     config_path.write_text(generated, encoding="utf-8")
     source = tmp_path / "test_fixture.py"

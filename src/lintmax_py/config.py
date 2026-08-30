@@ -5,8 +5,13 @@ import hashlib
 import json
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import tomllib
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
 
 from . import rules
 from .dprint import bump
@@ -103,7 +108,7 @@ def copyright_notice(root: Path) -> str:
     return ""
 
 
-def ruff_toml(inventory: list[dict[str, object]], root: Path) -> str:
+def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
     select = json.dumps(rules.selection(inventory))
     ignore = json.dumps(rules.ignored())
     allowed = confusables(root)
@@ -200,10 +205,10 @@ def typos_toml(root: Path) -> str:
     return body
 
 
-def materialize(inventory: list[dict[str, object]], root: Path) -> tuple[Path, str]:
+def materialize(inventory: rules.RuffInventory, root: Path) -> tuple[Path, str]:
     cfg_root = Path(tempfile.mkdtemp(prefix="lintmax-py-"))
     written = {
-        "ruff.toml": ruff_toml(inventory, root),
+        "ruff.toml": ruff_toml(list(inventory.rules), root),
         "dprint.json": dprint_json(),
         "typos.toml": typos_toml(root),
     }

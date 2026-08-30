@@ -1,15 +1,25 @@
 # Copyright (c) lintmax-py contributors. Licensed under the MIT License.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import shutil
+from pathlib import Path
 
 import pytest
 
-from lintmax_py import gate, staleness
-from lintmax_py.proc import Result
+from lintmax_py import gate, staleness, tools
+from lintmax_py.proc import Result, run
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+def _toolchain(root: Path) -> tools.Toolchain:
+    uvx_path = Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx").resolve()
+    metadata = uvx_path.stat()
+    version = run([str(uvx_path), "--version"]).out.splitlines()[0]
+    return tools.Toolchain(
+        tools={},
+        generation=root,
+        uvx=tools.UvxLauncher(uvx_path, metadata.st_dev, metadata.st_ino, version),
+        zsh=None,
+    )
 
 
 def test_an_exact_pin_is_not_stale_when_the_resolver_keeps_it(
@@ -31,7 +41,16 @@ def test_an_exact_pin_is_not_stale_when_the_resolver_keeps_it(
         raising=False,
     )
 
-    assert staleness.behind(tmp_path) == []
+    assert (
+        staleness.behind(
+            tmp_path,
+            (
+                str(Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx")),
+                tools.UV_VERSION,
+            ),
+        )
+        == []
+    )
 
 
 def test_a_compatible_direct_upgrade_is_reported(
@@ -54,8 +73,24 @@ def test_a_compatible_direct_upgrade_is_reported(
 
     monkeypatch.setattr(staleness, "run", resolver)
 
-    assert staleness.behind(tmp_path) == ["model 1.0 -> 1.1"]
-    assert commands == [["uv", "lock", "--upgrade", "--dry-run", "--no-progress", "--color", "never"]]
+    assert staleness.behind(
+        tmp_path,
+        (str(Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx")), tools.UV_VERSION),
+    ) == ["model 1.0 -> 1.1"]
+    assert commands == [
+        [
+            *(
+                str(Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx")),
+                tools.UV_VERSION,
+            ),
+            "lock",
+            "--upgrade",
+            "--dry-run",
+            "--no-progress",
+            "--color",
+            "never",
+        ],
+    ]
 
 
 def test_equivalent_distribution_name_spellings_match(
@@ -77,7 +112,10 @@ def test_equivalent_distribution_name_spellings_match(
         raising=False,
     )
 
-    assert staleness.behind(tmp_path) == ["my-package 1.0 -> 1.1"]
+    assert staleness.behind(
+        tmp_path,
+        (str(Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx")), tools.UV_VERSION),
+    ) == ["my-package 1.0 -> 1.1"]
 
 
 def test_a_transitive_upgrade_is_not_reported(
@@ -100,7 +138,10 @@ def test_a_transitive_upgrade_is_not_reported(
         raising=False,
     )
 
-    assert staleness.behind(tmp_path) == ["direct 1.0 -> 1.1"]
+    assert staleness.behind(
+        tmp_path,
+        (str(Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx")), tools.UV_VERSION),
+    ) == ["direct 1.0 -> 1.1"]
 
 
 @pytest.mark.parametrize(
@@ -133,7 +174,13 @@ def test_a_failed_resolution_fails_the_gate_instead_of_claiming_a_clean_check(
     )
 
     with pytest.raises(staleness.ResolutionUnavailableError) as error:
-        staleness.behind(tmp_path)
+        staleness.behind(
+            tmp_path,
+            (
+                str(Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx")),
+                tools.UV_VERSION,
+            ),
+        )
 
     assert error.value.result == Result(code=exit_code, out=resolver_output)
     assert str(error.value) == (
@@ -148,12 +195,12 @@ def test_a_resolution_failure_becomes_an_explicit_staleness_finding(
     """A resolver failure must make `lintmax-py check` nonzero, not look clean."""
     failure = staleness.ResolutionUnavailableError(Result(code=124, out="uv timed out"))
 
-    def unavailable(_root: Path) -> list[str]:
+    def unavailable(_root: Path, _uv_command: tuple[str, ...]) -> list[str]:
         raise failure
 
     monkeypatch.setattr(staleness, "behind", unavailable)
 
-    assert gate._staleness_stages(tmp_path) == [
+    assert gate._staleness_stages(tmp_path, _toolchain(tmp_path)) == [
         gate.Finding(
             stage="staleness",
             detail=("uv lock --upgrade --dry-run could not establish staleness evidence (exit 124): uv timed out"),

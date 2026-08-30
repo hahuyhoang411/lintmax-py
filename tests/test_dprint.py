@@ -107,7 +107,7 @@ def test_the_sweep_fixes_a_padded_table_and_then_accepts_it(tmp_path: Path) -> N
     page = tmp_path / "page.md"
     page.write_text("# Probe\n\n" + PADDED, encoding="utf-8")
 
-    assert sweep(tmp_path, config, fix=False) != []
-    assert sweep(tmp_path, config, fix=True) == []
+    assert sweep(tmp_path, config, shutil.which("dprint") or "dprint", fix=False) != []
+    assert sweep(tmp_path, config, shutil.which("dprint") or "dprint", fix=True) == []
     assert page.read_text(encoding="utf-8") == "# Probe\n\n" + COMPACT
-    assert sweep(tmp_path, config, fix=False) == []
+    assert sweep(tmp_path, config, shutil.which("dprint") or "dprint", fix=False) == []

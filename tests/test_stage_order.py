@@ -1,21 +1,59 @@
 # Copyright (c) lintmax-py contributors. Licensed under the MIT License.
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from lintmax_py import cli, gate
+from lintmax_py import cli, gate, tools
 from lintmax_py.proc import Result, run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     import pytest
 
 
+def _toolchain(root: Path, *, ruff: Path | None = None) -> tools.Toolchain:
+    managed_bin = root / "managed-tools"
+    paths = {
+        executable: (ruff if executable == "ruff" and ruff is not None else managed_bin / executable)
+        for executable in (
+            "ruff",
+            "ty",
+            "vulture",
+            "deptry",
+            "pip-audit",
+            "typos",
+            "shellcheck",
+            "shfmt",
+            "dprint",
+        )
+    }
+    selected = {
+        executable: tools.Tool(
+            package=executable,
+            executable=executable,
+            path=path,
+            version=f"{executable} test",
+        )
+        for executable, path in paths.items()
+    }
+    uvx_path = Path(shutil.which("uvx") or "/opt/homebrew/bin/uvx").resolve()
+    metadata = uvx_path.stat()
+    version = run([str(uvx_path), "--version"]).out.splitlines()[0]
+    return tools.Toolchain(
+        tools=MappingProxyType(selected),
+        generation=managed_bin,
+        uvx=tools.UvxLauncher(uvx_path, metadata.st_dev, metadata.st_ino, version),
+        zsh=managed_bin / "zsh",
+    )
+
+
 def _record(calls: list[str]) -> Callable[..., Result]:
     def fake(cmd: list[str], **_kwargs: object) -> Result:
-        calls.append(cmd[0])
+        calls.append(Path(cmd[0]).name)
         return Result(code=0, out="")
 
     return fake
@@ -262,7 +300,7 @@ def test_invalid_explicit_uv_project_environment_reports_a_ty_finding_without_ru
         monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(candidate))
         monkeypatch.setattr(gate, "run", _record(calls))
 
-        findings = gate._python_stages(root, root, fix=False)
+        findings = gate._python_stages(root, root, _toolchain(tmp_path), fix=False)
 
         assert findings == [
             gate.Finding(
@@ -326,12 +364,12 @@ def test_ty_runs_from_the_checked_projects_root_not_the_gate_callers_directory(
 
     monkeypatch.setattr(gate, "run", record)
 
-    findings = gate._python_stages(source_directory, source_directory, fix=False)
+    findings = gate._python_stages(source_directory, source_directory, _toolchain(tmp_path), fix=False)
 
     assert findings == []
-    ty_command, ty_cwd = next((command, cwd) for command, cwd in calls if command[0] == "ty")
+    ty_command, ty_cwd = next((command, cwd) for command, cwd in calls if Path(command[0]).name == "ty")
     assert ty_command == [
-        "ty",
+        _toolchain(tmp_path).path("ty"),
         "check",
         "--error",
         "all",
@@ -358,7 +396,7 @@ def test_cli_prints_an_invalid_explicit_uv_project_environment_as_a_ty_finding(
     monkeypatch.setattr(
         cli,
         "run_gate",
-        lambda checked_root, *, fix: gate._python_stages(checked_root, checked_root, fix=fix),
+        lambda checked_root, *, fix: gate._python_stages(checked_root, checked_root, _toolchain(tmp_path), fix=fix),
     )
 
     exit_code = cli.main(["check", str(root)])
@@ -382,7 +420,7 @@ def test_the_formatter_runs_before_the_checker_it_can_invalidate(
     calls: list[str] = []
     monkeypatch.setattr(gate, "run", _record(calls))
 
-    gate._repo_stages(tmp_path, tmp_path, fix=True)
+    gate._repo_stages(tmp_path, tmp_path, _toolchain(tmp_path), fix=True)
 
     assert "shfmt" in calls
     assert "shellcheck" in calls
@@ -404,10 +442,10 @@ def test_zsh_scripts_are_parsed_by_zsh_and_never_sent_to_shellcheck(
 
     monkeypatch.setattr(gate, "run", record)
 
-    gate._repo_stages(tmp_path, tmp_path, fix=False)
+    gate._repo_stages(tmp_path, tmp_path, _toolchain(tmp_path), fix=False)
 
-    assert ["zsh", "-n", str(script)] in commands
-    assert all(str(script) not in command for command in commands if command[0] == "shellcheck")
+    assert [str(_toolchain(tmp_path).zsh), "-n", str(script)] in commands
+    assert all(str(script) not in command for command in commands if Path(command[0]).name == "shellcheck")
 
 
 def test_zsh_env_options_that_consume_an_operand_stay_on_the_zsh_path(
@@ -431,11 +469,11 @@ def test_zsh_env_options_that_consume_an_operand_stay_on_the_zsh_path(
 
     monkeypatch.setattr(gate, "run", record)
 
-    gate._repo_stages(tmp_path, tmp_path, fix=False)
+    gate._repo_stages(tmp_path, tmp_path, _toolchain(tmp_path), fix=False)
 
     for script in scripts:
-        assert ["zsh", "-n", str(script)] in commands
-        assert all(str(script) not in command for command in commands if command[0] == "shellcheck")
+        assert [str(_toolchain(tmp_path).zsh), "-n", str(script)] in commands
+        assert all(str(script) not in command for command in commands if Path(command[0]).name == "shellcheck")
 
 
 def test_supported_shell_shebangs_stay_formatted_before_shellcheck(
@@ -454,21 +492,25 @@ def test_supported_shell_shebangs_stay_formatted_before_shellcheck(
 
     monkeypatch.setattr(gate, "run", record)
 
-    gate._repo_stages(tmp_path, tmp_path, fix=True)
+    gate._repo_stages(tmp_path, tmp_path, _toolchain(tmp_path), fix=True)
 
-    shfmt_index = next(index for index, command in enumerate(commands) if command[0] == "shfmt")
-    shellcheck_index = next(index for index, command in enumerate(commands) if command[0] == "shellcheck")
+    shfmt_index = next(index for index, command in enumerate(commands) if Path(command[0]).name == "shfmt")
+    shellcheck_index = next(index for index, command in enumerate(commands) if Path(command[0]).name == "shellcheck")
     assert shfmt_index < shellcheck_index
     for script in scripts:
         assert str(script) in commands[shfmt_index]
         assert str(script) in commands[shellcheck_index]
-    assert all(command[0] != "zsh" for command in commands)
+    assert all(Path(command[0]).name != "zsh" for command in commands)
 
 
 def _disable_gate_stages(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
     """Isolate the orchestration boundary from external linters for safety tests."""
-    monkeypatch.setattr(gate.tools, "ensure", list)
-    monkeypatch.setattr(gate.rules, "inventory", list)
+    monkeypatch.setattr(gate.tools, "ensure", lambda: _toolchain(root))
+    monkeypatch.setattr(
+        gate.rules,
+        "inventory",
+        lambda tool: gate.rules.RuffInventory(tool.path.as_posix(), tool.version, ()),
+    )
     monkeypatch.setattr(gate.config, "materialize", lambda *_args: (root, "digest"))
     monkeypatch.setattr(gate, "_python_stages", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(gate, "_repo_stages", lambda *_args, **_kwargs: [])
@@ -515,8 +557,16 @@ def test_fix_requests_only_ruff_safe_fixes(
 
     monkeypatch.setattr(gate, "run", record)
 
-    assert gate._python_stages(tmp_path, tmp_path, fix=True) == []
-    ruff_check = next(command for command in commands if command[:2] == ["ruff", "check"])
+    assert (
+        gate._python_stages(
+            tmp_path,
+            tmp_path,
+            _toolchain(tmp_path, ruff=Path(shutil.which("ruff") or "ruff")),
+            fix=True,
+        )
+        == []
+    )
+    ruff_check = next(command for command in commands if Path(command[0]).name == "ruff" and command[1] == "check")
     assert "--fix" in ruff_check
     assert "--unsafe-fixes" not in ruff_check
 
@@ -532,7 +582,7 @@ def test_fix_executes_a_ruff_safe_fix(
     source.write_text("import os\n", encoding="utf-8")
 
     def run_ruff(command: list[str], **kwargs: object) -> Result:
-        if command[0] == "ruff":
+        if Path(command[0]).name == "ruff":
             cwd = kwargs.get("cwd")
             assert cwd is None or isinstance(cwd, str)
             return run(command, cwd=cwd)
@@ -540,5 +590,30 @@ def test_fix_executes_a_ruff_safe_fix(
 
     monkeypatch.setattr(gate, "run", run_ruff)
 
-    assert gate._python_stages(tmp_path, tmp_path, fix=True) == []
+    assert (
+        gate._python_stages(
+            tmp_path,
+            tmp_path,
+            _toolchain(tmp_path, ruff=Path(shutil.which("ruff") or "ruff")),
+            fix=True,
+        )
+        == []
+    )
     assert "import os" not in source.read_text(encoding="utf-8")
+
+
+def test_cli_labels_private_toolchain_failure_without_a_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A cache or launcher failure is an attributable gate finding, not an exception dump."""
+    message = "cache is unwritable"
+
+    def unavailable() -> tools.Toolchain:
+        raise tools.ToolchainUnavailableError(message)
+
+    monkeypatch.setattr(gate.tools, "ensure", unavailable)
+
+    assert cli.main(["check", str(tmp_path)]) == 1
+    assert capsys.readouterr().err == "toolchain: cache is unwritable\n"
