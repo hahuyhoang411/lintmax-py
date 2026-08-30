@@ -50,7 +50,8 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 ## Strictness policy
 
-- The ruff rule set is derived from `ruff rule --all`, so a newly shipped rule is enabled the run after it lands. `ALL` alone is not enough: preview rules require their exact code.
+- The ruff rule set is derived from `ruff rule --all`, so a newly shipped rule is enabled the run after it lands. `ALL` alone is not enough: preview rules require an explicit selector, normally their code and otherwise their validated name.
+- If Ruff reports a rule without a code, lintmax-py selects its validated rule name; if it has neither selector, the gate fails closed rather than claiming exhaustive coverage.
 - Every rule is error or off, never warn.
 - ty runs with all rules at error severity.
 - `fix` applies only Ruff's safe fixes; unsafe rewrites remain findings for explicit review.

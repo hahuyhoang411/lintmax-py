@@ -26,6 +26,7 @@ SHELLCHECK_FLAGS = ("--enable=all", "--severity=style", "--external-sources")
 SHFMT_FLAGS = ("-s", "-ci", "-bn", "-sr", "-i", "2")
 ENV_OPTIONS_WITH_OPERAND = frozenset({"-u", "-C", "-P", "--unset", "--chdir"})
 ENV_OPTIONS_WITH_ATTACHED_OPERAND = ("-u", "-C", "-P", "--unset=", "--chdir=")
+UNKNOWN_RUFF_SELECTOR = "Unknown rule selector"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,9 @@ class Finding:
 
 
 def _stage(name: str, res: Result) -> list[Finding]:
-    if res.code == 0:
+    is_ruff_stage = name.startswith("ruff ")
+    has_unknown_selector = UNKNOWN_RUFF_SELECTOR in res.out
+    if res.code == 0 and not (is_ruff_stage and has_unknown_selector):
         return []
     detail = res.out or f"exit {res.code} with no output"
     return [Finding(stage=name, detail=detail)]
