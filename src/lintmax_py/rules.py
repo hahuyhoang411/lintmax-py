@@ -3,9 +3,16 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 from .proc import run
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from .tools import Tool
 
 DOCSTRING_REQUIRED = ("D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107")
 RULE_CODE = re.compile(r"[A-Z]+[0-9]+")
@@ -16,13 +23,22 @@ class RuffInventoryUnavailableError(RuntimeError):
     """Ruff could not provide the selectable rule inventory strict coverage requires."""
 
 
-def _rule_name(rule: dict[str, object]) -> str:
+@dataclass(frozen=True, slots=True)
+class RuffInventory:
+    """Rules emitted by one managed Ruff executable at one observed version."""
+
+    executable: str
+    version: str
+    rules: tuple[Mapping[str, object], ...]
+
+
+def _rule_name(rule: Mapping[str, object]) -> str:
     name = rule.get("name")
     return name if isinstance(name, str) and name else "<unnamed Ruff rule>"
 
 
 def _unselectable_selector_error(
-    rule: dict[str, object],
+    rule: Mapping[str, object],
 ) -> RuffInventoryUnavailableError:
     code = rule.get("code")
     if code is not None:
@@ -38,7 +54,7 @@ def _unselectable_selector_error(
     )
 
 
-def _selector(rule: dict[str, object]) -> str:
+def _selector(rule: Mapping[str, object]) -> str:
     code = rule.get("code")
     if code is None:
         name = rule.get("name")
@@ -50,22 +66,19 @@ def _selector(rule: dict[str, object]) -> str:
     raise _unselectable_selector_error(rule)
 
 
-def _validated_selectors(rules: list[dict[str, object]]) -> list[str]:
+def _validated_selectors(rules: Sequence[Mapping[str, object]]) -> list[str]:
     """Return exactly the selectors that make the supplied inventory independently selectable.
 
     Returns:
-        The validated selector for every supplied rule, in inventory order.
+        Selectors in inventory order.
 
     Raises:
-        RuffInventoryUnavailableError: A rule is malformed, unselectable, or duplicates a selector.
+        RuffInventoryUnavailableError: The inventory contains a malformed or duplicate selector.
 
     """
     selectors: list[str] = []
     seen: set[str] = set()
     for rule in rules:
-        if not isinstance(rule, dict):
-            msg = "ruff reported a non-object rule"
-            raise RuffInventoryUnavailableError(msg)
         selector = _selector(rule)
         if selector in seen:
             msg = (
@@ -78,15 +91,14 @@ def _validated_selectors(rules: list[dict[str, object]]) -> list[str]:
     return selectors
 
 
-def _validate_null_code_names(rules: list[dict[str, object]], executable: str) -> None:
+def _validate_null_code_names(
+    rules: Sequence[Mapping[str, object]],
+    executable: str,
+) -> None:
     """Verify each code-less fallback selector with the Ruff that reported it.
 
-    Ruff accepts unknown selectors in configuration as warnings, so syntactic validation of a
-    code-less name is not enough to support an exhaustive-coverage claim. This bounded probe only
-    checks null-code entries against the already resolved executable and inventory snapshot.
-
     Raises:
-        RuffInventoryUnavailableError: Ruff rejects an advertised code-less rule name.
+        RuffInventoryUnavailableError: Ruff rejects an advertised null-code rule name.
 
     """
     for rule in rules:
@@ -104,16 +116,25 @@ def _validate_null_code_names(rules: list[dict[str, object]], executable: str) -
             raise RuffInventoryUnavailableError(msg)
 
 
-def inventory() -> list[dict[str, object]]:
-    executable = shutil.which("ruff") or "ruff"
-    res = run([executable, "rule", "--all", "--output-format", "json"])
-    if res.code != 0:
-        msg = f"ruff rule --all failed with exit {res.code}: {res.out}"
+def inventory(ruff: Tool) -> RuffInventory:
+    """Capture a validated rule inventory from the managed Ruff selected for this invocation.
+
+    Returns:
+        The immutable inventory tied to Ruff's executable path and observed version.
+
+    Raises:
+        RuffInventoryUnavailableError: Ruff cannot emit or validate a selectable inventory.
+
+    """
+    executable = str(ruff.path)
+    result = run([executable, "rule", "--all", "--output-format", "json"])
+    if result.code != 0:
+        msg = f"ruff rule --all failed with exit {result.code}: {result.out}"
         raise RuffInventoryUnavailableError(msg)
     try:
-        parsed = json.loads(res.out)
+        parsed = json.loads(result.out)
     except json.JSONDecodeError as error:
-        msg = f"ruff rule --all returned invalid JSON: {error.msg}: {res.out}"
+        msg = f"ruff rule --all returned invalid JSON: {error.msg}: {result.out}"
         raise RuffInventoryUnavailableError(msg) from error
     if not isinstance(parsed, list):
         msg = "ruff rule --all returned a non-list inventory"
@@ -121,23 +142,29 @@ def inventory() -> list[dict[str, object]]:
     if not parsed:
         msg = "ruff reported an empty rule set"
         raise RuffInventoryUnavailableError(msg)
-    inventory: list[dict[str, object]] = []
+    captured: list[Mapping[str, object]] = []
     for rule in parsed:
         if not isinstance(rule, dict):
             msg = "ruff reported a non-object rule"
             raise RuffInventoryUnavailableError(msg)
-        inventory.append({str(key): value for key, value in rule.items()})
-    _validated_selectors(inventory)
-    _validate_null_code_names(inventory, executable)
-    return inventory
+        captured.append(
+            MappingProxyType({str(key): value for key, value in rule.items()}),
+        )
+    _validated_selectors(captured)
+    _validate_null_code_names(captured, executable)
+    return RuffInventory(
+        executable=executable,
+        version=ruff.version,
+        rules=tuple(captured),
+    )
 
 
-def preview_selectors(rules: list[dict[str, object]]) -> list[str]:
+def preview_selectors(rules: Sequence[Mapping[str, object]]) -> list[str]:
     pairs = zip(rules, _validated_selectors(rules), strict=True)
     return sorted(selector for rule, selector in pairs if rule.get("preview"))
 
 
-def selection(rules: list[dict[str, object]]) -> list[str]:
+def selection(rules: Sequence[Mapping[str, object]]) -> list[str]:
     return ["ALL", *preview_selectors(rules)]
 
 
@@ -145,12 +172,13 @@ def ignored() -> list[str]:
     return list(DOCSTRING_REQUIRED)
 
 
-def summary(rules: list[dict[str, object]]) -> str:
-    linters = {str(r.get("linter", "?")) for r in rules}
-    preview = preview_selectors(rules)
+def summary(inventory: RuffInventory) -> str:
+    linters = {str(rule.get("linter", "?")) for rule in inventory.rules}
+    preview = preview_selectors(inventory.rules)
     return (
-        f"ruff rules: {len(rules)} across {len(linters)} linters "
+        f"ruff: {inventory.version} at {inventory.executable}\n"
+        f"ruff rules: {len(inventory.rules)} across {len(linters)} linters "
         f"({len(preview)} preview-gated, all selected)\n"
-        f"ty rules: all at error severity\n"
+        "ty rules: all at error severity\n"
         f"disabled: {', '.join(ignored())} (docstring-required family)"
     )

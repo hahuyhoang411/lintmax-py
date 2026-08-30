@@ -10,9 +10,11 @@ import tomllib
 
 from . import config, dprint, rules, staleness, tools
 from .paths import SKIP_DIRS, skipped
-from .proc import Result, have, run
+from .proc import Result, run
 
-DEV_EXTRA_NAMES = frozenset({"dev", "development", "docs", "lint", "test", "testing", "tests", "typing"})
+DEV_EXTRA_NAMES = frozenset(
+    {"dev", "development", "docs", "lint", "test", "testing", "tests", "typing"},
+)
 """Extras that name a development role rather than a runtime feature.
 
 An extra is a shipped capability by default — a project declaring `receiver = ["flask"]` means the
@@ -44,18 +46,34 @@ def _stage(name: str, res: Result) -> list[Finding]:
     return [Finding(stage=name, detail=detail)]
 
 
-def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
+def _python_stages(
+    root: Path,
+    cfg: Path,
+    toolchain: tools.Toolchain,
+    *,
+    fix: bool,
+) -> list[Finding]:
+    """Run Python analyzers from the immutable managed toolchain snapshot.
+
+    Returns:
+        Findings from Ruff, Ty, and Vulture.
+
+    """
     found: list[Finding] = []
+    ruff = toolchain.path("ruff")
     ruff_common = ["--config", str(cfg / "ruff.toml"), "--no-cache"]
     if fix:
-        found += _stage("ruff format", run(["ruff", "format", *ruff_common, str(root)]))
+        found += _stage("ruff format", run([ruff, "format", *ruff_common, str(root)]))
         found += _stage(
             "ruff check",
-            run(["ruff", "check", "--fix", *ruff_common, str(root)]),
+            run([ruff, "check", "--fix", *ruff_common, str(root)]),
         )
     else:
-        found += _stage("ruff format", run(["ruff", "format", "--check", *ruff_common, str(root)]))
-        found += _stage("ruff check", run(["ruff", "check", *ruff_common, str(root)]))
+        found += _stage(
+            "ruff format",
+            run([ruff, "format", "--check", *ruff_common, str(root)]),
+        )
+        found += _stage("ruff check", run([ruff, "check", *ruff_common, str(root)]))
     project_root = _project_root(root)
     environment, environment_error = _environment(root)
     if environment_error:
@@ -64,13 +82,22 @@ def _python_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         found += _stage(
             "ty",
             run(
-                ["ty", "check", "--error", "all", "--project", str(project_root), *environment, str(root)],
+                [
+                    toolchain.path("ty"),
+                    "check",
+                    "--error",
+                    "all",
+                    "--project",
+                    str(project_root),
+                    *environment,
+                    str(root),
+                ],
                 cwd=str(project_root),
             ),
         )
     excluded = ",".join(f"*/{name}/*" for name in sorted(SKIP_DIRS))
     allowances = config.vulture_allowances(root)
-    vulture_args = ["vulture", "--exclude", excluded]
+    vulture_args = [toolchain.path("vulture"), "--exclude", excluded]
     for key, values in sorted(allowances.items()):
         vulture_args += [f"--{key.replace('_', '-')}", ",".join(values)]
     found += _stage("vulture", run([*vulture_args, str(root)]))
@@ -104,10 +131,23 @@ def _environment(root: Path) -> tuple[list[str], str | None]:
         venv = venv.resolve()
         if not venv.is_dir():
             return [], f"UV_PROJECT_ENVIRONMENT must name an existing directory: {venv}"
-        return ["--python", str(venv)], None
+        return ["--python", str(_environment_python(venv))], None
     workspace_root = _workspace_root(_project_root(root))
     venv = workspace_root / ".venv"
-    return (["--python", str(venv)], None) if venv.is_dir() else ([], None)
+    return (["--python", str(_environment_python(venv))], None) if venv.is_dir() else ([], None)
+
+
+def _environment_python(venv: Path) -> Path:
+    """Return the environment's interpreter when it exists, preserving directory-only test fixtures.
+
+    Returns:
+        The interpreter executable when the environment contains one, otherwise the environment directory.
+
+    """
+    for candidate in (venv / "bin" / "python", venv / "Scripts" / "python.exe"):
+        if candidate.is_file():
+            return candidate
+    return venv
 
 
 def _project_root(root: Path) -> Path:
@@ -180,7 +220,11 @@ def _workspace_includes(target: Path, root: Path, workspace: dict[str, object]) 
     """
     if target == root:
         return True
-    return _matches_workspace_glob(target, root, workspace.get("members")) and not _matches_workspace_glob(
+    return _matches_workspace_glob(
+        target,
+        root,
+        workspace.get("members"),
+    ) and not _matches_workspace_glob(
         target,
         root,
         workspace.get("exclude"),
@@ -221,12 +265,14 @@ def _deptry_args(root: Path) -> list[str]:
 
     """
     args: list[str] = ["."]
-    packages = sorted({
-        entry.name
-        for parent in (root, root / "src")
-        for entry in (parent.iterdir() if parent.is_dir() else [])
-        if entry.is_dir() and (entry / "__init__.py").is_file() and not skipped(entry)
-    })
+    packages = sorted(
+        {
+            entry.name
+            for parent in (root, root / "src")
+            for entry in (parent.iterdir() if parent.is_dir() else [])
+            if entry.is_dir() and (entry / "__init__.py").is_file() and not skipped(entry)
+        },
+    )
     for name in packages:
         args += ["--known-first-party", name]
     dev_extras = [name for name in _groups(root, "project", "optional-dependencies") if name in DEV_EXTRA_NAMES]
@@ -339,11 +385,24 @@ def _split_env_interpreter(spec: str, trailing: list[str]) -> str:
     return _env_interpreter([*split_args, *trailing])
 
 
-def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
+def _repo_stages(
+    root: Path,
+    cfg: Path,
+    toolchain: tools.Toolchain,
+    *,
+    fix: bool,
+) -> list[Finding]:
+    """Run repository-wide analyzers from the immutable managed toolchain snapshot.
+
+    Returns:
+        Findings from formatting, spelling, shell, dependency, and audit stages.
+
+    """
     found: list[Finding] = []
     dprint_config = cfg / "dprint.json"
+    dprint_executable = toolchain.path("dprint")
     dprint_args = [
-        "dprint",
+        dprint_executable,
         "fmt" if fix else "check",
         "--config",
         str(dprint_config),
@@ -352,58 +411,91 @@ def _repo_stages(root: Path, cfg: Path, *, fix: bool) -> list[Finding]:
         "--allow-no-files",
     ]
     found += _stage("dprint", run(dprint_args, cwd=str(root)))
-    found += [Finding(stage="markdown", detail=d) for d in dprint.sweep(root, dprint_config, fix=fix)]
-    found += _stage("typos", run(["typos", "--config", str(cfg / "typos.toml"), str(root)]))
+    found += [
+        Finding(stage="markdown", detail=detail)
+        for detail in dprint.sweep(root, dprint_config, dprint_executable, fix=fix)
+    ]
+    found += _stage(
+        "typos",
+        run([toolchain.path("typos"), "--config", str(cfg / "typos.toml"), str(root)]),
+    )
     scripts = [
-        str(p)
-        for p in sorted(root.rglob("*.sh"))
-        if not any(part in {".venv", ".git", "node_modules"} for part in p.parts)
+        str(path)
+        for path in sorted(root.rglob("*.sh"))
+        if not any(part in {".venv", ".git", "node_modules"} for part in path.parts)
     ]
     zsh_scripts = [script for script in scripts if _zsh_script(Path(script))]
     shellcheck_scripts = [script for script in scripts if script not in zsh_scripts]
     if shellcheck_scripts:
-        shfmt = ["shfmt", "-w" if fix else "-d", *SHFMT_FLAGS, *shellcheck_scripts]
+        shfmt = [
+            toolchain.path("shfmt"),
+            "-w" if fix else "-d",
+            *SHFMT_FLAGS,
+            *shellcheck_scripts,
+        ]
         found += _stage("shfmt", run(shfmt))
-        found += _stage("shellcheck", run(["shellcheck", *SHELLCHECK_FLAGS, *shellcheck_scripts]))
+        found += _stage(
+            "shellcheck",
+            run([toolchain.path("shellcheck"), *SHELLCHECK_FLAGS, *shellcheck_scripts]),
+        )
+    if zsh_scripts and toolchain.zsh is None:
+        found.append(Finding(stage="zsh", detail="zsh: not installed"))
     for script in zsh_scripts:
-        found += _stage("zsh", run(["zsh", "-n", script]))
+        if toolchain.zsh is not None:
+            found += _stage("zsh", run([str(toolchain.zsh), "-n", script]))
     if (root / "pyproject.toml").is_file():
-        found += _stage("deptry", run(["deptry", *_deptry_args(root)], cwd=str(root)))
-        found += _stage("pip-audit", run(["pip-audit", "--progress-spinner", "off"], cwd=str(root)))
+        found += _stage(
+            "deptry",
+            run([toolchain.path("deptry"), *_deptry_args(root)], cwd=str(root)),
+        )
+        found += _stage(
+            "pip-audit",
+            run(
+                [toolchain.path("pip-audit"), "--progress-spinner", "off"],
+                cwd=str(root),
+            ),
+        )
     return found
 
 
-def _staleness_stages(root: Path) -> list[Finding]:
+def _staleness_stages(root: Path, toolchain: tools.Toolchain) -> list[Finding]:
     """Return upgrade findings or the resolver failure that prevents a staleness verdict.
 
-    The staleness probe is an evidence-producing gate stage. A failed resolver cannot establish
-    that the tree is current, so surface its unaltered diagnostic as a failing finding instead of
-    treating the absence of upgrade lines as a pass.
-
     Returns:
-        The direct upgrades found, or one diagnostic when uv could not resolve them.
+        Staleness findings, including a resolver failure when evidence cannot be produced.
 
     """
     try:
-        return [Finding(stage="staleness", detail=detail) for detail in staleness.behind(root)]
+        return [Finding(stage="staleness", detail=detail) for detail in staleness.behind(root, toolchain.uv_command())]
     except staleness.ResolutionUnavailableError as error:
         return [Finding(stage="staleness", detail=str(error))]
+    except tools.ToolchainUnavailableError as error:
+        return [Finding(stage="toolchain", detail=str(error))]
 
 
 def run_gate(root: Path, *, fix: bool) -> list[Finding]:
-    missing = tools.ensure()
-    findings = [Finding(stage="toolchain", detail=m) for m in missing]
-    inventory = rules.inventory()
-    cfg, _digest = config.materialize(inventory, root)
+    try:
+        toolchain = tools.ensure()
+    except tools.ToolchainUnavailableError as error:
+        return [Finding(stage="toolchain", detail=str(error))]
+    with toolchain:
+        inventory = rules.inventory(toolchain.tool("ruff"))
+        cfg, _digest = config.materialize(inventory, root)
 
-    findings += _python_stages(root, cfg, fix=fix)
-    findings += _repo_stages(root, cfg, fix=fix)
-    findings += _staleness_stages(root)
-
-    return findings
+        findings = _python_stages(root, cfg, toolchain, fix=fix)
+        findings += _repo_stages(root, cfg, toolchain, fix=fix)
+        findings += _staleness_stages(root, toolchain)
+        return findings
 
 
 def rules_text() -> str:
-    inventory = rules.inventory()
-    extra = [t for t in tools.executables() if have(t)]
-    return rules.summary(inventory) + "\nactive tools: " + ", ".join(extra)
+    with tools.ensure() as toolchain:
+        inventory = rules.inventory(toolchain.tool("ruff"))
+        active = [
+            f"{tool.executable} {tool.version} at {tool.path}"
+            for tool in sorted(
+                toolchain.tools.values(),
+                key=lambda current: current.executable,
+            )
+        ]
+        return rules.summary(inventory) + "\nactive tools: " + ", ".join(active)

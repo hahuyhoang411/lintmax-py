@@ -10,7 +10,9 @@ Python ships no strictness by default: no compiler, no unused-import error, no t
 
 ## Never stale
 
-No tool version is ever pinned. Ruff, ty and every child tool are fetched at latest on each run, and the rule set is DERIVED from the installed ruff rather than listed — so the moment ruff ships a new rule, your gate runs it. Direct dependency staleness is resolved through an upgrading `uv lock --dry-run`, so the gate reports only releases the project's declared constraints can install. An exact pin is a project decision, not perpetual staleness.
+The gate installs child tools at latest through pinned `uvx uv@0.12.3`. The pin makes the installer reproducible. It does not pin Ruff, ty, or any child tool. Each refresh builds an unpublished, private uv tool generation under lintmax-py's cache, validates the resolved launchers, then atomically publishes that generation. Each launcher must resolve inside its declared package directory, so one managed package cannot impersonate another. One invocation holds a lease on its immutable generation for the full gate, then releases it. Later refreshes retain the current generation and any leased generation, while reaping completed superseded generations. A `PATH` executable cannot replace a managed tool after the snapshot exists. Direct dependency staleness is resolved through the same pinned `uvx uv@0.12.3 lock --upgrade --dry-run`, so the gate reports only releases the project's declared constraints can install. An exact dependency pin is a project decision, not perpetual staleness.
+
+Managed toolchains support Unix hosts only. The gate needs Unix advisory file locks to preserve live generations during refresh and `/bin/zsh` for its shell syntax stage. On Windows it exits with a toolchain error rather than claiming the Unix-only stages ran.
 
 dprint plugins resolve through each plugin's `latest.json` and the concrete versioned URL is written back. A constant floating URL is deliberately NOT used: dprint caches a plugin by its URL, so an unchanging URL resolves once and then freezes silently, which is the exact staleness the floating form appears to solve.
 
@@ -29,7 +31,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 ## Self-evolving (automatic, never a command)
 
-- Child tools reinstalled at latest on a refresh cadence; CI always forces latest.
+- Child tools refresh at latest on a 24-hour cadence; CI always forces latest through `uvx uv@0.12.3`.
 - The binary refreshes itself in CI before gating.
 - No green-tree-hash cache: measured on 10,039 real files with all 968 rules, a full ruff run costs 4.3s while hashing the tree to skip it costs 2.6s, so the cache buys ~40% in its best case and adds a false-green failure mode. The expensive work is the network, and that is TTL-cached instead.
 - Direct dependency staleness resolved against the project's constraints every run.

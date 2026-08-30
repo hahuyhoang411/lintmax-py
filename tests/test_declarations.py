@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lintmax_py.config import COPYRIGHT_RULE, copyright_notice, ruff_toml, vulture_allowances
+from lintmax_py.config import (
+    COPYRIGHT_RULE,
+    copyright_notice,
+    ruff_toml,
+    vulture_allowances,
+)
 from lintmax_py.gate import DEV_EXTRA_NAMES, _deptry_args
 
 if TYPE_CHECKING:
