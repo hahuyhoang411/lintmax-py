@@ -480,7 +480,10 @@ def run_gate(root: Path, *, fix: bool) -> list[Finding]:
         return [Finding(stage="toolchain", detail=str(error))]
     with toolchain:
         inventory = rules.inventory(toolchain.tool("ruff"))
-        cfg, _digest = config.materialize(inventory, root)
+        try:
+            cfg, _digest = config.materialize(inventory, root)
+        except config.ProjectConfigurationError as error:
+            return [Finding(stage="config", detail=str(error))]
 
         findings = _python_stages(root, cfg, toolchain, fix=fix)
         findings += _repo_stages(root, cfg, toolchain, fix=fix)
