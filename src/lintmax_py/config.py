@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,10 +21,28 @@ from .paths import GLOB_EXCLUDES
 LINE_LENGTH = 123
 MIN_PROJECT_MAX_ARGS = 1
 MAX_PROJECT_MAX_ARGS = 6
+SUPPORTED_RUFF_TARGET_VERSIONS = (
+    "py37",
+    "py38",
+    "py39",
+    "py310",
+    "py311",
+    "py312",
+    "py313",
+    "py314",
+)
 
 
 class ProjectConfigurationError(ValueError):
     """A project declaration prevents lintmax-py from producing a truthful gate."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectConfiguration:
+    """The only Ruff declarations a project may contribute to the managed config."""
+
+    max_args: int | None = None
+    target_version: str | None = None
 
 
 DPRINT_SEED = [
@@ -115,50 +134,73 @@ def copyright_notice(root: Path) -> str:
     return ""
 
 
-def project_max_args(root: Path) -> int | None:
-    """Read the bounded public-function argument limit from one project declaration.
+def project_configuration(root: Path) -> ProjectConfiguration:
+    """Read and validate the bounded Ruff declarations from one project file.
 
-    The generated Ruff configuration otherwise keeps its default of five. A project can tighten
-    that limit, or raise it to six for a real public contract, but cannot configure away the
-    argument-count design signal altogether.
+    The gate owns all Ruff policy except the argument limit for a real public
+    contract and the target Python version that determines language semantics.
+    Parsing once before the managed toolchain starts makes malformed declarations
+    cheap configuration findings rather than analyzer work.
 
     Returns:
-        The declared maximum argument count, or nothing when the project uses Ruff's default.
+        The validated declarations, with defaults when no project file is present.
 
     Raises:
-        ProjectConfigurationError: If the declaration is malformed or exceeds the policy bound.
+        ProjectConfigurationError: If a bounded declaration is malformed or unsupported.
 
     """
     path = root / "pyproject.toml"
     if not path.is_file():
-        return None
+        return ProjectConfiguration()
     try:
         parsed = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
-        message = "cannot read [tool.ruff.lint.pylint].max-args from pyproject.toml"
+        message = "cannot read bounded Ruff configuration from pyproject.toml"
         raise ProjectConfigurationError(message) from error
     tool = parsed.get("tool")
     ruff = tool.get("ruff") if isinstance(tool, dict) else None
     lint = ruff.get("lint") if isinstance(ruff, dict) else None
     pylint = lint.get("pylint") if isinstance(lint, dict) else None
-    if pylint is None:
-        return None
-    if not isinstance(pylint, dict):
-        message = "[tool.ruff.lint.pylint] must be a table"
-        raise ProjectConfigurationError(message)
-    value = pylint.get("max-args")
-    if value is None:
-        return None
-    if type(value) is not int or not MIN_PROJECT_MAX_ARGS <= value <= MAX_PROJECT_MAX_ARGS:
-        message = (
-            "[tool.ruff.lint.pylint].max-args must be an integer from "
-            f"{MIN_PROJECT_MAX_ARGS} through {MAX_PROJECT_MAX_ARGS}"
-        )
-        raise ProjectConfigurationError(message)
-    return value
+    max_args: int | None = None
+    if pylint is not None:
+        if not isinstance(pylint, dict):
+            message = "[tool.ruff.lint.pylint] must be a table"
+            raise ProjectConfigurationError(message)
+        value = pylint.get("max-args")
+        if value is not None:
+            if type(value) is not int or not MIN_PROJECT_MAX_ARGS <= value <= MAX_PROJECT_MAX_ARGS:
+                message = (
+                    "[tool.ruff.lint.pylint].max-args must be an integer from "
+                    f"{MIN_PROJECT_MAX_ARGS} through {MAX_PROJECT_MAX_ARGS}"
+                )
+                raise ProjectConfigurationError(message)
+            max_args = value
+
+    target_version: str | None = None
+    target_value = ruff.get("target-version") if isinstance(ruff, dict) else None
+    if target_value is not None:
+        if type(target_value) is str and target_value in SUPPORTED_RUFF_TARGET_VERSIONS:
+            target_version = target_value
+        else:
+            allowed = ", ".join(SUPPORTED_RUFF_TARGET_VERSIONS)
+            message = f"[tool.ruff].target-version must be one of: {allowed}"
+            raise ProjectConfigurationError(message)
+
+    return ProjectConfiguration(max_args=max_args, target_version=target_version)
 
 
-def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
+def ruff_toml(
+    inventory: Sequence[Mapping[str, object]],
+    root: Path,
+    project: ProjectConfiguration | None = None,
+) -> str:
+    """Build managed Ruff config from inventory plus bounded project declarations.
+
+    Returns:
+        TOML for the managed Ruff invocation.
+
+    """
+    configuration = project if project is not None else project_configuration(root)
     select = json.dumps(rules.selection(inventory))
     ignore = json.dumps(rules.ignored())
     allowed = confusables(root)
@@ -166,10 +208,15 @@ def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
     notice = copyright_notice(root)
     if not notice:
         ignore = json.dumps([*json.loads(ignore), COPYRIGHT_RULE])
-    max_args = project_max_args(root)
-    pylint_table = f"[lint.pylint]\nmax-args = {max_args}\n" if max_args is not None else ""
+    pylint_table = f"[lint.pylint]\nmax-args = {configuration.max_args}\n" if configuration.max_args is not None else ""
+    target_version_line = (
+        f"target-version = {json.dumps(configuration.target_version)}\n"
+        if configuration.target_version is not None
+        else ""
+    )
     return (
         "preview = true\n"
+        f"{target_version_line}"
         f"line-length = {LINE_LENGTH}\n"
         f"exclude = {json.dumps(EXCLUDES)}\n"
         "[lint]\n"
@@ -258,10 +305,21 @@ def typos_toml(root: Path) -> str:
     return body
 
 
-def materialize(inventory: rules.RuffInventory, root: Path) -> tuple[Path, str]:
+def materialize(
+    inventory: rules.RuffInventory,
+    root: Path,
+    project: ProjectConfiguration | None = None,
+) -> tuple[Path, str]:
+    """Write generated tool configs using already-validated project declarations.
+
+    Returns:
+        The temporary config directory and its content digest.
+
+    """
+    configuration = project if project is not None else project_configuration(root)
     cfg_root = Path(tempfile.mkdtemp(prefix="lintmax-py-"))
     written = {
-        "ruff.toml": ruff_toml(list(inventory.rules), root),
+        "ruff.toml": ruff_toml(list(inventory.rules), root, configuration),
         "dprint.json": dprint_json(),
         "typos.toml": typos_toml(root),
     }
