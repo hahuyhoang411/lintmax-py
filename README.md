@@ -71,7 +71,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 
 Every rule config is embedded in the tool. Your project stays clean — no ruff.toml, no ty.toml, no dprint.json. Updating lintmax-py updates every project's strictness. The bundled config is generic only and carries no project or ecosystem opinion.
 
-The single exception is vocabulary, which is data rather than strictness. A spell checker with no project dictionary reports every domain noun a codebase owns — a client name, a product name, a protocol token — as a misspelling, and the only escapes would be renaming the domain or turning the stage off. So the `[default.extend-words]` and `[default.extend-identifiers]` tables are read from whichever of `typos.toml`, `_typos.toml`, `.typos.toml` or `pyproject.toml` (`[tool.typos]`) your project carries, in that order, and merged into the generated config. Nothing else in that file is read: the switches stay owned by the gate, so a project can name the words it uses and cannot weaken the check that reads them.
+Vocabulary is one narrow exception because it is data rather than strictness. A spell checker with no project dictionary reports every domain noun a codebase owns — a client name, a product name, a protocol token — as a misspelling, and the only escapes would be renaming the domain or turning the stage off. So the `[default.extend-words]` and `[default.extend-identifiers]` tables are read from whichever of `typos.toml`, `_typos.toml`, `.typos.toml` or `pyproject.toml` (`[tool.typos]`) your project carries, in that order, and merged into the generated config. Only those vocabulary tables are read for spelling: the switches stay owned by the gate, so a project can name the words it uses and cannot weaken the check that reads them.
 
 ```toml
 # typos.toml
@@ -85,6 +85,14 @@ The same principle covers the ambiguous-character rule: a codebase whose domain 
 # ruff.toml
 [lint]
 allowed-confusables = ["（", "）", "："]
+```
+
+One bounded exception preserves a real public-interface contract without making the argument-count rule optional. Ruff's default remains five arguments. A project may set `[tool.ruff.lint.pylint] max-args` to an integer from 1 through 6; seven and every malformed value fail the gate before it runs any lint stage. That lets an explicit six-input public command remain honest while retaining the design warning for seven inputs.
+
+```toml
+# pyproject.toml
+[tool.ruff.lint.pylint]
+max-args = 6
 ```
 
 Two more facts a gate cannot infer are read the same way. A dead-code scan cannot see a function reached only through a registration decorator, nor an attribute read only by a metaclass, so a project states them and every other name stays scanned:

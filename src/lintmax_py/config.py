@@ -18,6 +18,13 @@ from .dprint import bump
 from .paths import GLOB_EXCLUDES
 
 LINE_LENGTH = 123
+MIN_PROJECT_MAX_ARGS = 1
+MAX_PROJECT_MAX_ARGS = 6
+
+
+class ProjectConfigurationError(ValueError):
+    """A project declaration prevents lintmax-py from producing a truthful gate."""
+
 
 DPRINT_SEED = [
     "https://plugins.dprint.dev/json-0.23.0.wasm",
@@ -108,6 +115,49 @@ def copyright_notice(root: Path) -> str:
     return ""
 
 
+def project_max_args(root: Path) -> int | None:
+    """Read the bounded public-function argument limit from one project declaration.
+
+    The generated Ruff configuration otherwise keeps its default of five. A project can tighten
+    that limit, or raise it to six for a real public contract, but cannot configure away the
+    argument-count design signal altogether.
+
+    Returns:
+        The declared maximum argument count, or nothing when the project uses Ruff's default.
+
+    Raises:
+        ProjectConfigurationError: If the declaration is malformed or exceeds the policy bound.
+
+    """
+    path = root / "pyproject.toml"
+    if not path.is_file():
+        return None
+    try:
+        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        message = "cannot read [tool.ruff.lint.pylint].max-args from pyproject.toml"
+        raise ProjectConfigurationError(message) from error
+    tool = parsed.get("tool")
+    ruff = tool.get("ruff") if isinstance(tool, dict) else None
+    lint = ruff.get("lint") if isinstance(ruff, dict) else None
+    pylint = lint.get("pylint") if isinstance(lint, dict) else None
+    if pylint is None:
+        return None
+    if not isinstance(pylint, dict):
+        message = "[tool.ruff.lint.pylint] must be a table"
+        raise ProjectConfigurationError(message)
+    value = pylint.get("max-args")
+    if value is None:
+        return None
+    if type(value) is not int or not MIN_PROJECT_MAX_ARGS <= value <= MAX_PROJECT_MAX_ARGS:
+        message = (
+            "[tool.ruff.lint.pylint].max-args must be an integer from "
+            f"{MIN_PROJECT_MAX_ARGS} through {MAX_PROJECT_MAX_ARGS}"
+        )
+        raise ProjectConfigurationError(message)
+    return value
+
+
 def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
     select = json.dumps(rules.selection(inventory))
     ignore = json.dumps(rules.ignored())
@@ -116,6 +166,8 @@ def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
     notice = copyright_notice(root)
     if not notice:
         ignore = json.dumps([*json.loads(ignore), COPYRIGHT_RULE])
+    max_args = project_max_args(root)
+    pylint_table = f"[lint.pylint]\nmax-args = {max_args}\n" if max_args is not None else ""
     return (
         "preview = true\n"
         f"line-length = {LINE_LENGTH}\n"
@@ -124,6 +176,7 @@ def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
         f"select = {select}\n"
         f"ignore = {ignore}\n"
         f"{allowed_line}"
+        f"{pylint_table}"
         f"[lint.per-file-ignores]\n{_test_scoping()}"
         "[lint.flake8-quotes]\n"
         'inline-quotes = "double"\n'
