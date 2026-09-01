@@ -59,8 +59,6 @@ def test_target_version_classifies_tomllib_as_a_standard_library_module(
     """A Python 3.12 declaration corrects Ruff's default Python 3.10 classification."""
     with tools.ensure() as toolchain:
         ruff = toolchain.tool("ruff")
-        if ruff.version != RUFF_0165_VERSION:
-            pytest.skip(f"requires managed Ruff {RUFF_0165_VERSION}, found: {ruff.version}")
         default_result = _ruff_check_tomllib_import_order(tmp_path, ruff.path)
 
         assert default_result.code == 1
