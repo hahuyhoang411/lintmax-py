@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Self
 import pytest
 import tomllib
 
-from lintmax_py import config, gate, rules
+from lintmax_py import config, gate, rules, tools
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -16,7 +16,20 @@ if TYPE_CHECKING:
     from lintmax_py.proc import Result
 
 
-def _ruff_check_tomllib_import_order(root: Path) -> Result:
+RUFF_0165_VERSION = "ruff 0.16.5"
+RUFF_0165_TARGET_VERSIONS = (
+    "py37",
+    "py38",
+    "py39",
+    "py310",
+    "py311",
+    "py312",
+    "py313",
+    "py314",
+)
+
+
+def _ruff_check_tomllib_import_order(root: Path, executable: Path) -> Result:
     """Run generated config on an import whose classification needs Python 3.11.
 
     Returns:
@@ -29,7 +42,7 @@ def _ruff_check_tomllib_import_order(root: Path) -> Result:
     generated.write_text(config.ruff_toml([], root), encoding="utf-8")
     return rules.run(
         [
-            "ruff",
+            str(executable),
             "check",
             "--config",
             str(generated),
@@ -44,23 +57,30 @@ def test_target_version_classifies_tomllib_as_a_standard_library_module(
     tmp_path: Path,
 ) -> None:
     """A Python 3.12 declaration corrects Ruff's default Python 3.10 classification."""
-    default_result = _ruff_check_tomllib_import_order(tmp_path)
+    with tools.ensure() as toolchain:
+        ruff = toolchain.tool("ruff")
+        if ruff.version != RUFF_0165_VERSION:
+            pytest.skip(f"requires managed Ruff {RUFF_0165_VERSION}, found: {ruff.version}")
+        default_result = _ruff_check_tomllib_import_order(tmp_path, ruff.path)
 
-    assert default_result.code == 1
-    assert "unsorted-imports" in default_result.out
+        assert default_result.code == 1
+        assert "unsorted-imports" in default_result.out
 
-    (tmp_path / "pyproject.toml").write_text('[tool.ruff]\ntarget-version = "py312"\n', encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.ruff]\ntarget-version = "py312"\n',
+            encoding="utf-8",
+        )
 
-    result = _ruff_check_tomllib_import_order(tmp_path)
+        result = _ruff_check_tomllib_import_order(tmp_path, ruff.path)
 
-    assert result.code == 0, result.out
+        assert result.code == 0, result.out
 
 
 def test_target_version_accepts_every_value_supported_by_managed_ruff(
     tmp_path: Path,
 ) -> None:
     """Generated configuration accepts each target enum value from Ruff 0.16.5."""
-    for target_version in config.SUPPORTED_RUFF_TARGET_VERSIONS:
+    for target_version in RUFF_0165_TARGET_VERSIONS:
         (tmp_path / "pyproject.toml").write_text(
             f'[tool.ruff]\ntarget-version = "{target_version}"\n',
             encoding="utf-8",
@@ -182,3 +202,35 @@ def test_invalid_target_version_stops_the_gate_before_analyzer_stages(
             detail="[tool.ruff].target-version must be one of: py37, py38, py39, py310, py311, py312, py313, py314",
         ),
     ]
+
+
+def test_invalid_target_version_stops_before_toolchain_or_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed target configuration must fail before the managed toolchain is touched."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.ruff]\ntarget-version = "py315"\n',
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+    toolchain = _Toolchain()
+
+    def ensure() -> _Toolchain:
+        calls.append("tools.ensure")
+        return toolchain
+
+    def inventory(_tool: object) -> rules.RuffInventory:
+        calls.append("rules.inventory")
+        return rules.RuffInventory("/managed/ruff", RUFF_0165_VERSION, ())
+
+    monkeypatch.setattr(gate.tools, "ensure", ensure)
+    monkeypatch.setattr(gate.rules, "inventory", inventory)
+
+    assert gate.run_gate(tmp_path, fix=False) == [
+        gate.Finding(
+            stage="config",
+            detail="[tool.ruff].target-version must be one of: py37, py38, py39, py310, py311, py312, py313, py314",
+        ),
+    ]
+    assert calls == []

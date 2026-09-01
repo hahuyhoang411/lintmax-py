@@ -41,7 +41,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 | Layer | Tool | Catches |
 | --- | --- | --- |
 | format | ruff format | deterministic formatting |
-| lint | ruff, every rule including preview | 968 rules across 59 linters at ruff 0.16.1 |
+| lint | ruff, every installed rule including preview | syntax, imports, correctness, security and style |
 | types | ty, every rule at error | type errors, including unannotated bodies mypy skips |
 | dead code | vulture | unreachable functions, classes and names |
 | unused deps | deptry | declared-but-unused and used-but-undeclared |
@@ -87,7 +87,7 @@ The same principle covers the ambiguous-character rule: a codebase whose domain 
 allowed-confusables = ["（", "）", "："]
 ```
 
-Python version is likewise project knowledge: it changes which modules Ruff classifies as standard library and which upgrades it can safely suggest. A project may set only `[tool.ruff] target-version`; lintmax-py accepts the Ruff 0.16.5 values `py37` through `py314` and rejects every other type or value before it runs analyzer stages. No other project Ruff setting crosses into the generated configuration.
+Python version is likewise project knowledge: it changes which modules Ruff classifies as standard library and which upgrades it can safely suggest. At Ruff's top level, lintmax-py reads only `[tool.ruff] target-version`; invalid values become config findings before the managed toolchain starts. The documented nested exceptions — `allowed-confusables`, `notice-rgx`, and `max-args` — remain limited to their respective domain facts. No other project Ruff setting crosses into the generated configuration.
 
 ```toml
 # pyproject.toml

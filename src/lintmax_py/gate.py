@@ -475,13 +475,17 @@ def _staleness_stages(root: Path, toolchain: tools.Toolchain) -> list[Finding]:
 
 def run_gate(root: Path, *, fix: bool) -> list[Finding]:
     try:
+        project = config.project_configuration(root)
+    except config.ProjectConfigurationError as error:
+        return [Finding(stage="config", detail=str(error))]
+    try:
         toolchain = tools.ensure()
     except tools.ToolchainUnavailableError as error:
         return [Finding(stage="toolchain", detail=str(error))]
     with toolchain:
         inventory = rules.inventory(toolchain.tool("ruff"))
         try:
-            cfg, _digest = config.materialize(inventory, root)
+            cfg, _digest = config.materialize(inventory, root, project)
         except config.ProjectConfigurationError as error:
             return [Finding(stage="config", detail=str(error))]
 
