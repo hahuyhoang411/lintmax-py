@@ -20,6 +20,16 @@ from .paths import GLOB_EXCLUDES
 LINE_LENGTH = 123
 MIN_PROJECT_MAX_ARGS = 1
 MAX_PROJECT_MAX_ARGS = 6
+SUPPORTED_RUFF_TARGET_VERSIONS = (
+    "py37",
+    "py38",
+    "py39",
+    "py310",
+    "py311",
+    "py312",
+    "py313",
+    "py314",
+)
 
 
 class ProjectConfigurationError(ValueError):
@@ -158,6 +168,41 @@ def project_max_args(root: Path) -> int | None:
     return value
 
 
+def project_target_version(root: Path) -> str | None:
+    """Read the declared Python version without accepting any other Ruff setting.
+
+    The managed Ruff version accepts only the values in
+    ``SUPPORTED_RUFF_TARGET_VERSIONS``. Any other value would make the gate's
+    generated configuration untruthful, so it is rejected before analyzer
+    stages can run.
+
+    Returns:
+        The declared target version, or nothing when Ruff's default remains in force.
+
+    Raises:
+        ProjectConfigurationError: If the declaration cannot be read or is unsupported.
+
+    """
+    path = root / "pyproject.toml"
+    if not path.is_file():
+        return None
+    try:
+        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        message = "cannot read [tool.ruff].target-version from pyproject.toml"
+        raise ProjectConfigurationError(message) from error
+    tool = parsed.get("tool")
+    ruff = tool.get("ruff") if isinstance(tool, dict) else None
+    value = ruff.get("target-version") if isinstance(ruff, dict) else None
+    if value is None:
+        return None
+    if type(value) is not str or value not in SUPPORTED_RUFF_TARGET_VERSIONS:
+        allowed = ", ".join(SUPPORTED_RUFF_TARGET_VERSIONS)
+        message = f"[tool.ruff].target-version must be one of: {allowed}"
+        raise ProjectConfigurationError(message)
+    return value
+
+
 def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
     select = json.dumps(rules.selection(inventory))
     ignore = json.dumps(rules.ignored())
@@ -167,9 +212,12 @@ def ruff_toml(inventory: Sequence[Mapping[str, object]], root: Path) -> str:
     if not notice:
         ignore = json.dumps([*json.loads(ignore), COPYRIGHT_RULE])
     max_args = project_max_args(root)
+    target_version = project_target_version(root)
     pylint_table = f"[lint.pylint]\nmax-args = {max_args}\n" if max_args is not None else ""
+    target_version_line = f"target-version = {json.dumps(target_version)}\n" if target_version is not None else ""
     return (
         "preview = true\n"
+        f"{target_version_line}"
         f"line-length = {LINE_LENGTH}\n"
         f"exclude = {json.dumps(EXCLUDES)}\n"
         "[lint]\n"

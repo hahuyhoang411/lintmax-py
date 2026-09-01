@@ -87,6 +87,14 @@ The same principle covers the ambiguous-character rule: a codebase whose domain 
 allowed-confusables = ["（", "）", "："]
 ```
 
+Python version is likewise project knowledge: it changes which modules Ruff classifies as standard library and which upgrades it can safely suggest. A project may set only `[tool.ruff] target-version`; lintmax-py accepts the Ruff 0.16.5 values `py37` through `py314` and rejects every other type or value before it runs analyzer stages. No other project Ruff setting crosses into the generated configuration.
+
+```toml
+# pyproject.toml
+[tool.ruff]
+target-version = "py312"
+```
+
 One bounded exception preserves a real public-interface contract without making the argument-count rule optional. Ruff's default remains five arguments. A project may set `[tool.ruff.lint.pylint] max-args` to an integer from 1 through 6; seven and every malformed value fail the gate before it runs any lint stage. That lets an explicit six-input public command remain honest while retaining the design warning for seven inputs.
 
 ```toml
