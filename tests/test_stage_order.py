@@ -617,3 +617,76 @@ def test_cli_labels_private_toolchain_failure_without_a_traceback(
 
     assert cli.main(["check", str(tmp_path)]) == 1
     assert capsys.readouterr().err == "toolchain: cache is unwritable\n"
+
+
+def test_vulture_ignores_findings_below_eighty_percent_confidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dead-code stage accepts only findings backed by sufficient evidence."""
+    commands: list[list[str]] = []
+
+    def record(command: list[str], **_kwargs: object) -> Result:
+        commands.append(command)
+        return Result(code=0, out="")
+
+    monkeypatch.setattr(gate, "run", record)
+
+    assert gate._python_stages(tmp_path, tmp_path, _toolchain(tmp_path), fix=False) == []
+
+    vulture_command = next(command for command in commands if Path(command[0]).name == "vulture")
+    assert "--min-confidence" in vulture_command
+    assert vulture_command[vulture_command.index("--min-confidence") + 1] == "80"
+
+
+def test_ruff_runs_from_the_checked_root_with_a_relative_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruff resolves project-relative namespace directories from the checked root."""
+    root = tmp_path / "project"
+    root.mkdir()
+    calls: list[tuple[list[str], str | None]] = []
+
+    def record(command: list[str], **kwargs: object) -> Result:
+        cwd = kwargs.get("cwd")
+        assert cwd is None or isinstance(cwd, str)
+        calls.append((command, cwd))
+        return Result(code=0, out="")
+
+    monkeypatch.setattr(gate, "run", record)
+
+    assert gate._python_stages(root, root, _toolchain(tmp_path), fix=False) == []
+
+    ruff_calls = [(command, cwd) for command, cwd in calls if Path(command[0]).name == "ruff"]
+    assert all(command[-1] == "." and cwd == str(root) for command, cwd in ruff_calls)
+
+
+def test_managed_vulture_filters_low_confidence_findings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate keeps Vulture's 90% and 100% findings while dropping a 60% finding."""
+    source = tmp_path / "dead_code.py"
+    source.write_text(
+        "import os\n\n\ndef unused_function():\n    return 1\n\n\ndef reachable():\n    return\n    unreachable = 1\n",
+        encoding="utf-8",
+    )
+
+    with tools.ensure() as toolchain:
+
+        def run_vulture(command: list[str], **kwargs: object) -> Result:
+            if Path(command[0]).name != "vulture":
+                return Result(code=0, out="")
+            cwd = kwargs.get("cwd")
+            assert cwd is None or isinstance(cwd, str)
+            return run(command, cwd=cwd)
+
+        monkeypatch.setattr(gate, "run", run_vulture)
+        findings = gate._python_stages(tmp_path, tmp_path, toolchain, fix=False)
+
+    assert len(findings) == 1
+    detail = findings[0].detail
+    assert "unused function 'unused_function' (60% confidence)" not in detail
+    assert "unused import 'os' (90% confidence)" in detail
+    assert "unreachable code after 'return' (100% confidence)" in detail

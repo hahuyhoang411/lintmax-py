@@ -43,7 +43,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 | format | ruff format | deterministic formatting |
 | lint | ruff, every installed rule including preview | syntax, imports, correctness, security and style |
 | types | ty, every rule at error | type errors, including unannotated bodies mypy skips |
-| dead code | vulture | unreachable functions, classes and names |
+| dead code | vulture at 80% confidence or higher | unreachable functions, classes and names |
 | unused deps | deptry | declared-but-unused and used-but-undeclared |
 | vulnerabilities | pip-audit | PyPI Advisory Database plus OSV |
 | spelling | typos | misspellings in code, identifiers and filenames |
@@ -56,6 +56,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 - If Ruff reports a rule without a code, lintmax-py selects its validated rule name; if it has neither selector, the gate fails closed rather than claiming exhaustive coverage.
 - Every rule is error or off, never warn.
 - ty runs with all rules at error severity.
+- Vulture reports only findings at 80% confidence or higher.
 - `fix` applies only Ruff's safe fixes; unsafe rewrites remain findings for explicit review.
 - Ruff's own conflicting-rule pairs resolve to the stricter member.
 - The disable list starts EMPTY. Each entry is earned by a concrete conflict found on real code, never anticipated, and carries its reason.
@@ -66,6 +67,7 @@ Prints `ok` on a single line on success, exit 0 = clean. Tool output is shown on
 | --- | --- |
 | `D100`-`D107` | operator decision: code is self-explanatory rather than docstring-documented |
 | `CPY001` | stands down unless the project declares its `notice-rgx`; enforced on every file once it does |
+| `COM812` | conflicts with Ruff format, which owns trailing-comma layout |
 
 ## Configless
 
@@ -87,12 +89,13 @@ The same principle covers the ambiguous-character rule: a codebase whose domain 
 allowed-confusables = ["（", "）", "："]
 ```
 
-Python version is likewise project knowledge: it changes which modules Ruff classifies as standard library and which upgrades it can safely suggest. At Ruff's top level, lintmax-py reads only `[tool.ruff] target-version`; invalid values become config findings before the managed toolchain starts. The documented nested exceptions — `allowed-confusables`, `notice-rgx`, and `max-args` — remain limited to their respective domain facts. No other project Ruff setting crosses into the generated configuration.
+Python version and namespace package directories are likewise project knowledge. The version changes which modules Ruff classifies as standard library and which upgrades it can safely suggest. Namespace directories define module resolution for packages that deliberately omit `__init__.py`. At Ruff's top level, lintmax-py reads only `[tool.ruff] target-version` and `namespace-packages`; invalid values become config findings before the managed toolchain starts. Namespace packages must be non-empty relative paths to existing descendant directories. Symlinks, the project root itself, absolute paths, parent traversal, and globs fail closed. The documented nested exceptions — `allowed-confusables`, `notice-rgx`, and `max-args` — remain limited to their respective domain facts. No other project Ruff setting crosses into the generated configuration.
 
 ```toml
 # pyproject.toml
 [tool.ruff]
 target-version = "py312"
+namespace-packages = ["src/example_plugins"]
 ```
 
 One bounded exception preserves a real public-interface contract without making the argument-count rule optional. Ruff's default remains five arguments. A project may set `[tool.ruff.lint.pylint] max-args` to an integer from 1 through 6; seven and every malformed value fail the gate before it runs any lint stage. That lets an explicit six-input public command remain honest while retaining the design warning for seven inputs.
