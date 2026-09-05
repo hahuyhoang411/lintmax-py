@@ -5,8 +5,8 @@ import hashlib
 import json
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING
+from pathlib import Path, PureWindowsPath
+from typing import TYPE_CHECKING, TypeGuard
 
 import tomllib
 
@@ -43,6 +43,7 @@ class ProjectConfiguration:
 
     max_args: int | None = None
     target_version: str | None = None
+    namespace_packages: tuple[str, ...] | None = None
 
 
 DPRINT_SEED = [
@@ -135,12 +136,14 @@ def copyright_notice(root: Path) -> str:
 
 
 def project_configuration(root: Path) -> ProjectConfiguration:
-    """Read and validate the bounded Ruff declarations from one project file.
+    """Read and validate the bounded Ruff declarations from `pyproject.toml`.
 
-    The gate owns all Ruff policy except the argument limit for a real public
-    contract and the target Python version that determines language semantics.
-    Parsing once before the managed toolchain starts makes malformed declarations
-    cheap configuration findings rather than analyzer work.
+    Projects contribute only `[tool.ruff] target-version`, `namespace-packages`,
+    `[tool.ruff.lint.pylint] max-args`, `[tool.ruff.lint] allowed-confusables`, and
+    `[tool.ruff.lint.flake8-copyright] notice-rgx` to managed Ruff policy. This
+    function validates the first three. The dedicated readers handle the latter two.
+    Parsing before the managed toolchain starts makes malformed declarations cheap
+    configuration findings rather than analyzer work.
 
     Returns:
         The validated declarations, with defaults when no project file is present.
@@ -186,7 +189,87 @@ def project_configuration(root: Path) -> ProjectConfiguration:
             message = f"[tool.ruff].target-version must be one of: {allowed}"
             raise ProjectConfigurationError(message)
 
-    return ProjectConfiguration(max_args=max_args, target_version=target_version)
+    return ProjectConfiguration(
+        max_args=max_args,
+        target_version=target_version,
+        namespace_packages=_namespace_packages(root, ruff),
+    )
+
+
+def _namespace_packages(root: Path, ruff: object) -> tuple[str, ...] | None:
+    """Read the bounded namespace-package declarations from a Ruff table.
+
+    Returns:
+        Validated namespace package directories, or nothing when they are undeclared.
+
+    Raises:
+        ProjectConfigurationError: The declaration names a non-directory or leaves the project root.
+
+    """
+    namespace_value = ruff.get("namespace-packages") if isinstance(ruff, dict) else None
+    if namespace_value is None:
+        return None
+    if not isinstance(namespace_value, list):
+        message = "[tool.ruff].namespace-packages must be a list of relative package directories"
+        raise ProjectConfigurationError(message)
+    namespace_packages: list[str] = []
+    for value in namespace_value:
+        if not _namespace_directory(root, value):
+            message = (
+                "[tool.ruff].namespace-packages must contain existing descendant directories "
+                "without symlinks, parent traversal, or globs"
+            )
+            raise ProjectConfigurationError(message)
+        namespace_packages.append(value)
+    return tuple(namespace_packages)
+
+
+def _namespace_directory(root: Path, value: object) -> TypeGuard[str]:
+    """Return whether one project declaration is a portable relative directory path.
+
+    Returns:
+        Whether ``value`` is an existing descendant directory without parent traversal or globs.
+
+    """
+    if not isinstance(value, str) or not value.strip() or any(char in value for char in "*?[]{}"):
+        return False
+    windows_path = PureWindowsPath(value)
+    candidate = root / value
+    if (
+        Path(value).is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or ".." in Path(value).parts
+        or ".." in windows_path.parts
+    ):
+        return False
+    if _namespace_path_has_symlink(root, value):
+        return False
+    try:
+        project_root = root.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(project_root)
+    except (OSError, ValueError):
+        return False
+    return resolved != project_root and resolved.is_dir()
+
+
+def _namespace_path_has_symlink(root: Path, value: str) -> bool:
+    """Return whether a declared path traverses a symlink below the project root.
+
+    Returns:
+        Whether a configured path component is a symlink, including an unreadable one.
+
+    """
+    candidate = root
+    try:
+        for component in Path(value).parts:
+            candidate /= component
+            if candidate.is_symlink():
+                return True
+    except OSError:
+        return True
+    return False
 
 
 def ruff_toml(
@@ -202,26 +285,32 @@ def ruff_toml(
     """
     configuration = project if project is not None else project_configuration(root)
     select = json.dumps(rules.selection(inventory))
-    ignore = json.dumps(rules.ignored())
+    ignore = rules.ignored()
     allowed = confusables(root)
     allowed_line = f"allowed-confusables = {json.dumps(allowed, ensure_ascii=False)}\n" if allowed else ""
     notice = copyright_notice(root)
     if not notice:
-        ignore = json.dumps([*json.loads(ignore), COPYRIGHT_RULE])
+        ignore.append(COPYRIGHT_RULE)
     pylint_table = f"[lint.pylint]\nmax-args = {configuration.max_args}\n" if configuration.max_args is not None else ""
     target_version_line = (
         f"target-version = {json.dumps(configuration.target_version)}\n"
         if configuration.target_version is not None
         else ""
     )
+    namespace_packages_line = (
+        f"namespace-packages = {json.dumps(configuration.namespace_packages)}\n"
+        if configuration.namespace_packages is not None
+        else ""
+    )
     return (
         "preview = true\n"
         f"{target_version_line}"
+        f"{namespace_packages_line}"
         f"line-length = {LINE_LENGTH}\n"
         f"exclude = {json.dumps(EXCLUDES)}\n"
         "[lint]\n"
         f"select = {select}\n"
-        f"ignore = {ignore}\n"
+        f"ignore = {json.dumps(ignore)}\n"
         f"{allowed_line}"
         f"{pylint_table}"
         f"[lint.per-file-ignores]\n{_test_scoping()}"

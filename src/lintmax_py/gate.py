@@ -63,17 +63,23 @@ def _python_stages(
     ruff = toolchain.path("ruff")
     ruff_common = ["--config", str(cfg / "ruff.toml"), "--no-cache"]
     if fix:
-        found += _stage("ruff format", run([ruff, "format", *ruff_common, str(root)]))
+        found += _stage(
+            "ruff format",
+            run([ruff, "format", *ruff_common, "."], cwd=str(root)),
+        )
         found += _stage(
             "ruff check",
-            run([ruff, "check", "--fix", *ruff_common, str(root)]),
+            run([ruff, "check", "--fix", *ruff_common, "."], cwd=str(root)),
         )
     else:
         found += _stage(
             "ruff format",
-            run([ruff, "format", "--check", *ruff_common, str(root)]),
+            run([ruff, "format", "--check", *ruff_common, "."], cwd=str(root)),
         )
-        found += _stage("ruff check", run([ruff, "check", *ruff_common, str(root)]))
+        found += _stage(
+            "ruff check",
+            run([ruff, "check", *ruff_common, "."], cwd=str(root)),
+        )
     project_root = _project_root(root)
     environment, environment_error = _environment(root)
     if environment_error:
@@ -97,7 +103,13 @@ def _python_stages(
         )
     excluded = ",".join(f"*/{name}/*" for name in sorted(SKIP_DIRS))
     allowances = config.vulture_allowances(root)
-    vulture_args = [toolchain.path("vulture"), "--exclude", excluded]
+    vulture_args = [
+        toolchain.path("vulture"),
+        "--exclude",
+        excluded,
+        "--min-confidence",
+        "80",
+    ]
     for key, values in sorted(allowances.items()):
         vulture_args += [f"--{key.replace('_', '-')}", ",".join(values)]
     found += _stage("vulture", run([*vulture_args, str(root)]))

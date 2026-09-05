@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .tools import Tool
 
 DOCSTRING_REQUIRED = ("D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107")
+FORMATTER_CONFLICTS = ("COM812",)
 RULE_CODE = re.compile(r"[A-Z]+[0-9]+")
 RULE_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
@@ -169,7 +170,7 @@ def selection(rules: Sequence[Mapping[str, object]]) -> list[str]:
 
 
 def ignored() -> list[str]:
-    return list(DOCSTRING_REQUIRED)
+    return [*DOCSTRING_REQUIRED, *FORMATTER_CONFLICTS]
 
 
 def summary(inventory: RuffInventory) -> str:
@@ -180,5 +181,5 @@ def summary(inventory: RuffInventory) -> str:
         f"ruff rules: {len(inventory.rules)} across {len(linters)} linters "
         f"({len(preview)} preview-gated, all selected)\n"
         "ty rules: all at error severity\n"
-        f"disabled: {', '.join(ignored())} (docstring-required family)"
+        f"disabled: {', '.join(ignored())} (docstring-required rules; Ruff format conflict)"
     )
