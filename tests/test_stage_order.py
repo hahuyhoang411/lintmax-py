@@ -432,7 +432,7 @@ def test_dprint_formats_the_project_tree_and_never_the_gates_config_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """dprint resolves its config's `includes` against the config file's directory, not the cwd.
+    """The formatter resolves its config's `includes` against the config file's directory, not the cwd.
 
     The gate writes that config into a private temporary directory, so an invocation that leans on
     the config's own includes checks the gate's generated files and reports the project clean.

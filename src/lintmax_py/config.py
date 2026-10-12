@@ -21,6 +21,7 @@ from .paths import GLOB_EXCLUDES
 LINE_LENGTH = 123
 MIN_PROJECT_MAX_ARGS = 1
 MAX_PROJECT_MAX_ARGS = 6
+RUNTIME_MODULE_RULE = "DEP001"
 SUPPORTED_RUFF_TARGET_VERSIONS = (
     "py37",
     "py38",
@@ -142,8 +143,10 @@ def project_configuration(root: Path) -> ProjectConfiguration:
     `[tool.ruff.lint.pylint] max-args`, `[tool.ruff.lint] allowed-confusables`, and
     `[tool.ruff.lint.flake8-copyright] notice-rgx` to managed Ruff policy. This
     function validates the first three. The dedicated readers handle the latter two.
-    Parsing before the managed toolchain starts makes malformed declarations cheap
-    configuration findings rather than analyzer work.
+    It also validates the runtime-provided modules deptry reads from
+    `[tool.deptry.per_rule_ignores] DEP001`. Parsing before the managed toolchain
+    starts makes malformed declarations cheap configuration findings rather than
+    analyzer work.
 
     Returns:
         The validated declarations, with defaults when no project file is present.
@@ -161,6 +164,7 @@ def project_configuration(root: Path) -> ProjectConfiguration:
         message = "cannot read bounded Ruff configuration from pyproject.toml"
         raise ProjectConfigurationError(message) from error
     tool = parsed.get("tool")
+    _validate_runtime_modules(tool)
     ruff = tool.get("ruff") if isinstance(tool, dict) else None
     lint = ruff.get("lint") if isinstance(ruff, dict) else None
     pylint = lint.get("pylint") if isinstance(lint, dict) else None
@@ -194,6 +198,40 @@ def project_configuration(root: Path) -> ProjectConfiguration:
         target_version=target_version,
         namespace_packages=_namespace_packages(root, ruff),
     )
+
+
+def _validate_runtime_modules(tool: object) -> None:
+    """Validate the modules a project declares as provided at run time rather than installed.
+
+    A module the project injects when it runs, such as a sibling checkout loaded through
+    `uv run --with <path>`, is imported but never declared, and declaring it would be false.
+    deptry reads `[tool.deptry.per_rule_ignores] DEP001` itself and matches each entry against an
+    import's top-level module name exactly. A dotted path, a distribution name, or a glob therefore
+    matches nothing and leaves a declaration that reads as working. Every other rule's entries stay
+    deptry's own concern, so nothing here widens what the check tolerates.
+
+    Raises:
+        ProjectConfigurationError: The declaration is not a list of top-level module names.
+
+    """
+    deptry = tool.get("deptry") if isinstance(tool, dict) else None
+    if deptry is None:
+        return
+    if not isinstance(deptry, dict):
+        message = "[tool.deptry] must be a table"
+        raise ProjectConfigurationError(message)
+    ignores = deptry.get("per_rule_ignores")
+    if ignores is None:
+        return
+    if not isinstance(ignores, dict):
+        message = "[tool.deptry.per_rule_ignores] must be a table"
+        raise ProjectConfigurationError(message)
+    modules = ignores.get(RUNTIME_MODULE_RULE)
+    if modules is None:
+        return
+    if not isinstance(modules, list) or not all(isinstance(module, str) and module.isidentifier() for module in modules):
+        message = f"[tool.deptry.per_rule_ignores].{RUNTIME_MODULE_RULE} must be a list of top-level module names"
+        raise ProjectConfigurationError(message)
 
 
 def _namespace_packages(root: Path, ruff: object) -> tuple[str, ...] | None:

@@ -106,13 +106,21 @@ One bounded exception preserves a real public-interface contract without making 
 max-args = 6
 ```
 
-Two more facts a gate cannot infer are read the same way. A dead-code scan cannot see a function reached only through a registration decorator, nor an attribute read only by a metaclass, so a project states them and every other name stays scanned:
+Three more facts a gate cannot infer are read the same way. A dead-code scan cannot see a function reached only through a registration decorator, nor an attribute read only by a metaclass, so a project states them and every other name stays scanned:
 
 ```toml
 # pyproject.toml
 [tool.vulture]
 ignore_decorators = ["@app.route"]
 ignore_names = ["model_config"]
+```
+
+A dependency check cannot see a module the project injects at run time, such as a sibling checkout loaded with `uv run --with <path>`. Declaring it as a dependency would be false, so the project names it in deptry's own DEP001 ignore list and every other import stays checked. deptry matches an entry only against an import's top-level module name, so each entry must be one. A bare string, a dotted path, a hyphenated distribution name, or a glob fails the gate before any tool runs.
+
+```toml
+# pyproject.toml
+[tool.deptry.per_rule_ignores]
+DEP001 = ["sibling_runtime"]
 ```
 
 And the copyright rule enforces nothing until a project says whose notice it wants — the holder is a legal fact about that codebase. Declare `notice-rgx` and the rule is enforced on every file; declare nothing and it stands down, with no other rule relaxed.
