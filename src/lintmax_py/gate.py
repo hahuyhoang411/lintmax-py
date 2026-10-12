@@ -24,7 +24,7 @@ mechanism for development dependencies and the checker already recognises it una
 conventional development EXTRA names are forwarded, for projects that predate that section.
 """
 
-SHELLCHECK_FLAGS = ("--enable=all", "--severity=style", "--external-sources")
+SHELLCHECK_FLAGS = ("--norc", "--enable=all", "--severity=style", "--external-sources")
 SHFMT_FLAGS = ("-s", "-ci", "-bn", "-sr", "-i", "2")
 ENV_OPTIONS_WITH_OPERAND = frozenset({"-u", "-C", "-P", "--unset", "--chdir"})
 ENV_OPTIONS_WITH_ATTACHED_OPERAND = ("-u", "-C", "-P", "--unset=", "--chdir=")
@@ -93,6 +93,8 @@ def _python_stages(
                     "check",
                     "--error",
                     "all",
+                    "--config-file",
+                    str(cfg / "ty.toml"),
                     "--project",
                     str(project_root),
                     *environment,
@@ -430,7 +432,7 @@ def _repo_stages(
     ]
     found += _stage(
         "typos",
-        run([toolchain.path("typos"), "--config", str(cfg / "typos.toml"), str(root)]),
+        run([toolchain.path("typos"), "--isolated", "--config", str(cfg / "typos.toml"), str(root)]),
     )
     scripts = [
         str(path)
