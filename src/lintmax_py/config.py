@@ -330,7 +330,6 @@ def dprint_json() -> str:
             "indentWidth": 2,
             "useTabs": False,
             "newLineKind": "lf",
-            "includes": ["**/*"],
             "excludes": EXCLUDES,
             "plugins": bump(DPRINT_SEED),
         },

@@ -16,6 +16,15 @@ TTL_SECONDS = 6 * 60 * 60
 SUCCESS_STATUS = 200
 
 MARKDOWN_GLOB = "**/*.md"
+PROJECT_GLOB = "**/*"
+"""The project's whole tree, passed on the command line rather than as the config's `includes`.
+
+dprint resolves a config file's `includes` against the directory holding that config, and the gate
+writes its config into a private temporary directory. Leaning on the config's includes checks only
+the gate's own generated files and reports the project clean. A pattern on the command line resolves
+against the working directory, which is the checked project, while the config's `**/` excludes still
+apply to it.
+"""
 
 
 VERSION_SUFFIX = re.compile(r"[-@]v?\d+\.\d+\.\d+$")

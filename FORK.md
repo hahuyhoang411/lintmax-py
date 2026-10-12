@@ -10,6 +10,7 @@ This is a fork of [1qh/lintmax-py](https://github.com/1qh/lintmax-py). `upstream
 | truthful gates (PR #1) | `README.md`, `src/lintmax_py/config.py`, `src/lintmax_py/gate.py`, `src/lintmax_py/rules.py`, `src/lintmax_py/staleness.py`, `tests/test_rules.py`, `tests/test_stage_order.py`, `tests/test_staleness.py` | zsh uses its parser; staleness follows project constraints and fails closed; rule/config inputs are validated at the gate boundary |
 | target uv environment (PR #3) | `src/lintmax_py/gate.py`, `tests/test_stage_order.py` | Ty resolves from the checked uv project/workspace environment |
 | safe fix policy | `src/lintmax_py/comments.py` (deleted), `src/lintmax_py/gate.py`, `src/lintmax_py/paths.py`, `tests/test_stage_order.py`, `README.md` | no universal comment-deletion stage; `fix` requests only Ruff safe fixes |
+| dprint checks the project tree | `src/lintmax_py/config.py`, `src/lintmax_py/dprint.py`, `src/lintmax_py/gate.py`, `tests/test_stage_order.py` | the main `dprint` run formats the checked project instead of the gate's own temporary config directory |
 
 ### Why
 
@@ -31,6 +32,10 @@ Ty must resolve imports against the checked project's uv environment, not the ga
 
 Comments have no sound universal lint rule: they can carry clinical rationale, provenance, licenses, and directives. The fork therefore has no universal comment-deletion stage or comment finding. `fix` still runs Ruff's safe repairs, but never asks Ruff for unsafe rewrites; those remain explicit review decisions. A comment attached to code that Ruff safely removes may disappear with that code.
 
+### dprint checks the project tree
+
+dprint resolves a config file's `includes` against the directory that holds the config, not the working directory. The gate writes its config into a private temporary directory, so the main `dprint` invocation, which named no files and leaned on `"includes": ["**/*"]`, checked only the gate's generated `dprint.json` and `ruff.toml` and never a project file. A malformed project `data.json` passed while the generated files failed on formatting the gate never asked for. The main invocation now passes `**/*` on the command line, which dprint resolves against the checked project, the same way the markdown sweep already passed `**/*.md`. The config's `**/` excludes still apply to command-line patterns. The meaningless `includes` key is gone from the generated config. The generated files are not reformatted to dprint's taste, because they are tool input that dprint no longer sees.
+
 ## Rebasing onto upstream
 
 ```bash
@@ -44,6 +49,6 @@ git push --set-upstream origin sync/upstream-<version>
 
 `switch --create` fails rather than overwriting an existing branch, and this recipe never checks out or rebases the shared `main` branch. Open a PR from the new `sync/upstream-<version>` branch only after its gates pass.
 
-The conflicts to expect are in `_repo_stages` and `_python_stages` in `src/lintmax_py/gate.py`. Preserve both the dprint flags/sweep and the target-project Ty environment selection. On every rebase, whether Git reports a conflict or not, review zsh dispatch, the staleness resolver/failure path, the rule-input boundary, `_environment`, its workspace helpers, `_python_stages`, `run_gate`, and the deletion of `comments.py`; do not reintroduce universal comment deletion or Ruff `--unsafe-fixes`. If upstream gains a table option in the plugin config, drop the whole markdown patch: delete `compact_tables`, `markdown_files` and `sweep` from `src/lintmax_py/dprint.py`, `filter_text` from `src/lintmax_py/proc.py`, and restore the plain `dprint` invocation.
+The conflicts to expect are in `_repo_stages` and `_python_stages` in `src/lintmax_py/gate.py`. Preserve the dprint flags/sweep, the main dprint run's command-line `PROJECT_GLOB`, and the target-project Ty environment selection. On every rebase, whether Git reports a conflict or not, review zsh dispatch, the staleness resolver/failure path, the rule-input boundary, `_environment`, its workspace helpers, `_python_stages`, `run_gate`, and the deletion of `comments.py`; do not reintroduce universal comment deletion or Ruff `--unsafe-fixes`. If upstream gains a table option in the plugin config, drop the whole markdown patch: delete `compact_tables`, `markdown_files` and `sweep` from `src/lintmax_py/dprint.py`, `filter_text` from `src/lintmax_py/proc.py`, and restore the plain `dprint` invocation while keeping its `PROJECT_GLOB`.
 
 Never push this branch to `upstream`. `origin` is the fork.

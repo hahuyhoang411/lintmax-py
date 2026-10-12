@@ -421,6 +421,7 @@ def _repo_stages(
         "--excludes",
         dprint.MARKDOWN_GLOB,
         "--allow-no-files",
+        dprint.PROJECT_GLOB,
     ]
     found += _stage("dprint", run(dprint_args, cwd=str(root)))
     found += [

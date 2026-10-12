@@ -6,19 +6,19 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from lintmax_py import cli, gate, tools
+import pytest
+
+from lintmax_py import cli, config, gate, tools
 from lintmax_py.proc import Result, run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    import pytest
 
-
-def _toolchain(root: Path, *, ruff: Path | None = None) -> tools.Toolchain:
+def _toolchain(root: Path, **real: Path) -> tools.Toolchain:
     managed_bin = root / "managed-tools"
     paths = {
-        executable: (ruff if executable == "ruff" and ruff is not None else managed_bin / executable)
+        executable: real.get(executable, managed_bin / executable)
         for executable in (
             "ruff",
             "ty",
@@ -425,6 +425,45 @@ def test_the_formatter_runs_before_the_checker_it_can_invalidate(
     assert "shfmt" in calls
     assert "shellcheck" in calls
     assert calls.index("shfmt") < calls.index("shellcheck")
+
+
+@pytest.mark.skipif(shutil.which("dprint") is None, reason="the formatter's own file discovery is what is under test")
+def test_dprint_formats_the_project_tree_and_never_the_gates_config_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dprint resolves its config's `includes` against the config file's directory, not the cwd.
+
+    The gate writes that config into a private temporary directory, so an invocation that leans on
+    the config's own includes checks the gate's generated files and reports the project clean.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    data = project / "data.json"
+    data.write_text('{"a":   1}', encoding="utf-8")
+    generated = tmp_path / "gate-config"
+    generated.mkdir()
+    monkeypatch.setattr(config, "bump", lambda plugins, **_: plugins)
+    dprint_config = config.dprint_json()
+    (generated / "dprint.json").write_text(dprint_config, encoding="utf-8")
+
+    def run_dprint(command: list[str], **kwargs: object) -> Result:
+        if Path(command[0]).name != "dprint":
+            return Result(code=0, out="")
+        cwd = kwargs.get("cwd")
+        assert cwd is None or isinstance(cwd, str)
+        return run(command, cwd=cwd)
+
+    monkeypatch.setattr(gate, "run", run_dprint)
+    toolchain = _toolchain(tmp_path, dprint=Path(shutil.which("dprint") or "dprint"))
+
+    checked = [finding.detail for finding in gate._repo_stages(project, generated, toolchain, fix=False)]
+    assert any("data.json" in detail for detail in checked)
+    assert not any(generated.name in detail for detail in checked)
+
+    assert gate._repo_stages(project, generated, toolchain, fix=True) == []
+    assert data.read_text(encoding="utf-8") == '{ "a": 1 }\n'
+    assert (generated / "dprint.json").read_text(encoding="utf-8") == dprint_config
 
 
 def test_zsh_scripts_are_parsed_by_zsh_and_never_sent_to_shellcheck(
