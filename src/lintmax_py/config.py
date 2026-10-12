@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -22,6 +23,25 @@ LINE_LENGTH = 123
 MIN_PROJECT_MAX_ARGS = 1
 MAX_PROJECT_MAX_ARGS = 6
 RUNTIME_MODULE_RULE = "DEP001"
+DEPTRY_FACT_KEYS = frozenset(
+    {
+        "known_first_party",
+        "optional_dependencies_dev_groups",
+        "package_module_name_map",
+        "pep621_dev_dependency_groups",
+        "per_rule_ignores",
+        "requirements_files",
+        "requirements_files_dev",
+    },
+)
+"""The `[tool.deptry]` keys that state facts about a project rather than switch part of the check off.
+
+deptry reads its section of the project's `pyproject.toml` itself and cannot be pointed at another
+file, because the same file holds the dependencies it checks. Every key outside this set, such as
+`ignore`, `exclude`, `extend_exclude` or `ignore_notebooks`, removes a rule or a part of the tree.
+"""
+NAME_CHARACTER = re.compile(r"\w")
+UNRESOLVED_IMPORT_PATTERN = re.compile(r"[A-Za-z_]\w*(\.([A-Za-z_]\w*|\*\*?))*")
 SUPPORTED_RUFF_TARGET_VERSIONS = (
     "py37",
     "py38",
@@ -40,11 +60,12 @@ class ProjectConfigurationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ProjectConfiguration:
-    """The only Ruff declarations a project may contribute to the managed config."""
+    """The only declarations a project may contribute to the managed Ruff and ty configs."""
 
     max_args: int | None = None
     target_version: str | None = None
     namespace_packages: tuple[str, ...] | None = None
+    unresolved_imports: tuple[str, ...] = ()
 
 
 DPRINT_SEED = [
@@ -143,8 +164,8 @@ def project_configuration(root: Path) -> ProjectConfiguration:
     `[tool.ruff.lint.pylint] max-args`, `[tool.ruff.lint] allowed-confusables`, and
     `[tool.ruff.lint.flake8-copyright] notice-rgx` to managed Ruff policy. This
     function validates the first three. The dedicated readers handle the latter two.
-    It also validates the runtime-provided modules deptry reads from
-    `[tool.deptry.per_rule_ignores] DEP001`. Parsing before the managed toolchain
+    It also validates the `[tool.deptry]` section deptry reads for itself, and the
+    runtime-provided modules ty may leave unresolved. Parsing before the managed toolchain
     starts makes malformed declarations cheap configuration findings rather than
     analyzer work.
 
@@ -164,7 +185,8 @@ def project_configuration(root: Path) -> ProjectConfiguration:
         message = "cannot read bounded Ruff configuration from pyproject.toml"
         raise ProjectConfigurationError(message) from error
     tool = parsed.get("tool")
-    _validate_runtime_modules(tool)
+    _validate_deptry(tool)
+    _validate_vulture_allowances(tool)
     ruff = tool.get("ruff") if isinstance(tool, dict) else None
     lint = ruff.get("lint") if isinstance(ruff, dict) else None
     pylint = lint.get("pylint") if isinstance(lint, dict) else None
@@ -197,21 +219,23 @@ def project_configuration(root: Path) -> ProjectConfiguration:
         max_args=max_args,
         target_version=target_version,
         namespace_packages=_namespace_packages(root, ruff),
+        unresolved_imports=_unresolved_imports(tool),
     )
 
 
-def _validate_runtime_modules(tool: object) -> None:
-    """Validate the modules a project declares as provided at run time rather than installed.
+def _validate_deptry(tool: object) -> None:
+    """Validate the `[tool.deptry]` section deptry reads from the project for itself.
 
-    A module the project injects when it runs, such as a sibling checkout loaded through
-    `uv run --with <path>`, is imported but never declared, and declaring it would be false.
-    deptry reads `[tool.deptry.per_rule_ignores] DEP001` itself and matches each entry against an
-    import's top-level module name exactly. A dotted path, a distribution name, or a glob therefore
-    matches nothing and leaves a declaration that reads as working. Every other rule's entries stay
-    deptry's own concern, so nothing here widens what the check tolerates.
+    The section may hold only the facts in `DEPTRY_FACT_KEYS`, so a project cannot switch a rule
+    off or carve a directory out of the check. A module the project injects when it runs, such as a
+    sibling checkout loaded through `uv run --with <path>`, is imported but never declared, and
+    declaring it would be false. deptry matches each `[tool.deptry.per_rule_ignores] DEP001` entry
+    against an import's top-level module name exactly. A dotted path, a distribution name, or a glob
+    therefore matches nothing and leaves a declaration that reads as working.
 
     Raises:
-        ProjectConfigurationError: The declaration is not a list of top-level module names.
+        ProjectConfigurationError: The section holds a key that weakens the check, or the DEP001
+            declaration is not a list of top-level module names.
 
     """
     deptry = tool.get("deptry") if isinstance(tool, dict) else None
@@ -219,6 +243,10 @@ def _validate_runtime_modules(tool: object) -> None:
         return
     if not isinstance(deptry, dict):
         message = "[tool.deptry] must be a table"
+        raise ProjectConfigurationError(message)
+    switches = sorted(set(deptry) - DEPTRY_FACT_KEYS)
+    if switches:
+        message = f"[tool.deptry] may only declare {', '.join(sorted(DEPTRY_FACT_KEYS))}; remove {', '.join(switches)}"
         raise ProjectConfigurationError(message)
     ignores = deptry.get("per_rule_ignores")
     if ignores is None:
@@ -232,6 +260,66 @@ def _validate_runtime_modules(tool: object) -> None:
     if not isinstance(modules, list) or not all(isinstance(module, str) and module.isidentifier() for module in modules):
         message = f"[tool.deptry.per_rule_ignores].{RUNTIME_MODULE_RULE} must be a list of top-level module names"
         raise ProjectConfigurationError(message)
+
+
+def _validate_vulture_allowances(tool: object) -> None:
+    """Reject a dead-code allowance that names nothing in particular.
+
+    vulture matches `ignore_names` and `ignore_decorators` as shell-style wildcards, and the gate
+    forwards both lists on the command line. A pattern made only of wildcards, such as `*` or `@*`,
+    therefore hides every finding while reading as an allowance.
+
+    Raises:
+        ProjectConfigurationError: An allowance is not a list of patterns that each name something.
+
+    """
+    vulture = tool.get("vulture") if isinstance(tool, dict) else None
+    if not isinstance(vulture, dict):
+        return
+    for key in VULTURE_KEYS:
+        patterns = vulture.get(key)
+        if patterns is None:
+            continue
+        if not isinstance(patterns, list) or not all(
+            isinstance(pattern, str) and NAME_CHARACTER.search(pattern) for pattern in patterns
+        ):
+            message = f"[tool.vulture].{key} must be a list of patterns that each contain a name, not only wildcards"
+            raise ProjectConfigurationError(message)
+
+
+def _unresolved_imports(tool: object) -> tuple[str, ...]:
+    """Read the runtime-provided modules a project lets ty leave unresolved.
+
+    ty is pointed at the gate's own config, so the project's `[tool.ty]` section cannot relax a rule
+    or exclude a file. The one fact carried across is `[tool.ty.analysis] allowed-unresolved-imports`,
+    the type checker's view of the same injected modules deptry's DEP001 list names. Each pattern
+    must start with a literal module name, so `**` or `*.foo` cannot allow every unresolved import.
+
+    Returns:
+        The declared patterns, or nothing when the project declares none.
+
+    Raises:
+        ProjectConfigurationError: The declaration is not a list of module patterns rooted in a
+            named module.
+
+    """
+    ty = tool.get("ty") if isinstance(tool, dict) else None
+    analysis = ty.get("analysis") if isinstance(ty, dict) else None
+    patterns = analysis.get("allowed-unresolved-imports") if isinstance(analysis, dict) else None
+    if patterns is None:
+        return ()
+    message = (
+        "[tool.ty.analysis].allowed-unresolved-imports must be a list of module patterns "
+        "that start with a module name, such as `example_runtime.**`"
+    )
+    if not isinstance(patterns, list):
+        raise ProjectConfigurationError(message)
+    declared: list[str] = []
+    for pattern in patterns:
+        if not isinstance(pattern, str) or not UNRESOLVED_IMPORT_PATTERN.fullmatch(pattern):
+            raise ProjectConfigurationError(message)
+        declared.append(pattern)
+    return tuple(declared)
 
 
 def _namespace_packages(root: Path, ruff: object) -> tuple[str, ...] | None:
@@ -431,6 +519,12 @@ def typos_toml(root: Path) -> str:
     return body
 
 
+def ty_toml(configuration: ProjectConfiguration) -> str:
+    if not configuration.unresolved_imports:
+        return ""
+    return f"[analysis]\nallowed-unresolved-imports = {json.dumps(list(configuration.unresolved_imports))}\n"
+
+
 def materialize(
     inventory: rules.RuffInventory,
     root: Path,
@@ -448,6 +542,7 @@ def materialize(
         "ruff.toml": ruff_toml(list(inventory.rules), root, configuration),
         "dprint.json": dprint_json(),
         "typos.toml": typos_toml(root),
+        "ty.toml": ty_toml(configuration),
     }
     for name, body in written.items():
         (cfg_root / name).write_text(body, encoding="utf-8")

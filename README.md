@@ -115,6 +115,8 @@ ignore_decorators = ["@app.route"]
 ignore_names = ["model_config"]
 ```
 
+Each pattern must contain a name. vulture matches these lists as wildcards, so `*` or `@*` would hide every finding and fails the gate instead.
+
 A dependency check cannot see a module the project injects at run time, such as a sibling checkout loaded with `uv run --with <path>`. Declaring it as a dependency would be false, so the project names it in deptry's own DEP001 ignore list and every other import stays checked. deptry matches an entry only against an import's top-level module name, so each entry must be one. A bare string, a dotted path, a hyphenated distribution name, or a glob fails the gate before any tool runs.
 
 ```toml
@@ -122,6 +124,16 @@ A dependency check cannot see a module the project injects at run time, such as 
 [tool.deptry.per_rule_ignores]
 DEP001 = ["sibling_runtime"]
 ```
+
+The type checker needs the same fact, so a project names the injected module once more in ty's own terms. Each pattern must start with a module name, so `**` or `*.client` cannot allow every unresolved import.
+
+```toml
+# pyproject.toml
+[tool.ty.analysis]
+allowed-unresolved-imports = ["sibling_runtime.**"]
+```
+
+Nothing else a project writes for these tools is read. ty, typos and ShellCheck each get the gate's own config through `--config-file`, `--isolated` and `--norc`, so a project's `[[tool.ty.overrides]]`, `[tool.ty.src] exclude`, `_typos.toml` excludes and `.shellcheckrc` cannot hide a finding. The gate's own `--exclude` and `--min-confidence` flags already override vulture's. deptry cannot be pointed at another file, because the file it reads also holds the dependencies it checks. So `[tool.deptry]` may hold only the facts `known_first_party`, `optional_dependencies_dev_groups`, `package_module_name_map`, `pep621_dev_dependency_groups`, `per_rule_ignores`, `requirements_files` and `requirements_files_dev`. Any other key, such as `ignore`, `exclude`, `extend_exclude` or `ignore_notebooks`, fails the gate before any tool runs.
 
 And the copyright rule enforces nothing until a project says whose notice it wants — the holder is a legal fact about that codebase. Declare `notice-rgx` and the rule is enforced on every file; declare nothing and it stands down, with no other rule relaxed.
 

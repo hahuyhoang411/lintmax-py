@@ -373,6 +373,8 @@ def test_ty_runs_from_the_checked_projects_root_not_the_gate_callers_directory(
         "check",
         "--error",
         "all",
+        "--config-file",
+        str(source_directory / "ty.toml"),
         "--project",
         str(project),
         "--python",
